@@ -634,6 +634,311 @@ def build_summary(
     }
 
 
+def descriptive_stats(df):
+    """
+    Generate publication-ready descriptive statistics tables:
+
+    Table 1: Sociodemographic characteristics (frequencies & percentages)
+    Table 2: Knowledge score distribution
+    Table 3: Attitude score distribution
+    Table 4: HRT practice patterns
+
+    Returns: dict of DataFrames (table_name → DataFrame)
+
+    JS analogy: Like building summary objects with .reduce(), then formatting
+    them as arrays of {variable, frequency, percentage} objects.
+    """
+    print("=" * 70)
+    print("PHASE 3: Generating descriptive statistics...")
+    print("=" * 70)
+
+    tables = {}
+
+    # ── Table 1: Sociodemographic Characteristics ────────────────────────
+    rows = []
+    socio_display = {
+        "age": ("Age Group", "_1_Age_in_years"),
+        "education": ("Education Level", "_2_Education_level"),
+        "occupation": ("Occupation", "_3_What_is_your_profession"),
+        "marital": ("Marital Status", "_4_Marital_status"),
+        "income": ("Average Monthly Income", "_5_Average_monthly_income"),
+        "insurance": ("Health Insurance", "_6_Enrolled_in_health_insurance"),
+        "children": ("Number of Children", "_7_Number_of_children"),
+        "sex": (
+            "Sexual experience in Last 3 Months",
+            "_8_Have_you_had_any_in_the_last_3_months",
+        ),
+    }
+
+    for key, (display_name, col_name) in socio_display.items():
+        label_col = f"{key}_label"
+        if label_col in df.columns:
+            series = df[label_col].dropna()
+        elif col_name in df.columns:
+            series = df[col_name].dropna()
+        else:
+            continue
+
+        total = len(series)
+        counts = series.value_counts()
+
+        # Add variable header row
+        rows.append(
+            {
+                "Variable": display_name,
+                "Category": "",
+                "Frequency (n)": "",
+                "Percentage (%)": "",
+            }
+        )
+
+        # Sort categories in a meaningful order (use the codebook order)
+        if col_name in SOCIO_LABELS and label_col in df.columns:
+            ordered_labels = list(SOCIO_LABELS[col_name].values())
+            for label in ordered_labels:
+                n = counts.get(label, 0)
+                pct = n / total * 100 if total > 0 else 0
+                rows.append(
+                    {
+                        "Variable": "",
+                        "Category": label,
+                        "Frequency (n)": n,
+                        "Percentage (%)": f"{pct:.1f}",
+                    }
+                )
+        else:
+            for cat, n in counts.items():
+                pct = n / total * 100 if total > 0 else 0
+                rows.append(
+                    {
+                        "Variable": "",
+                        "Category": str(cat),
+                        "Frequency (n)": n,
+                        "Percentage (%)": f"{pct:.1f}",
+                    }
+                )
+
+    # Add menopausal status
+    if "menopausal_status_label" in df.columns:
+        series = df["menopausal_status_label"].dropna()
+        total = len(series)
+        counts = series.value_counts()
+        rows.append(
+            {
+                "Variable": "Menopausal Status",
+                "Category": "",
+                "Frequency (n)": "",
+                "Percentage (%)": "",
+            }
+        )
+        for cat in ["Premenopausal", "Perimenopausal", "Postmenopausal"]:
+            n = counts.get(cat, 0)
+            pct = n / total * 100 if total > 0 else 0
+            rows.append(
+                {
+                    "Variable": "",
+                    "Category": cat,
+                    "Frequency (n)": n,
+                    "Percentage (%)": f"{pct:.1f}",
+                }
+            )
+
+    table1 = pd.DataFrame(rows)
+    tables["Table 1 - Sociodemographics"] = table1
+
+    print("\n  TABLE 1: Sociodemographic Characteristics of Respondents")
+    print("  " + "─" * 65)
+    print(table1.to_string(index=False))
+
+    # ── Table 2: Knowledge Score Distribution ────────────────────────────
+    know_data = df[df["knowledge_score"].notna()]
+
+    know_rows = []
+    know_rows.append(
+        {"Measure": "Total respondents scored", "Value": f"{len(know_data)}"}
+    )
+    know_rows.append(
+        {
+            "Measure": "Mean knowledge score ± SD",
+            "Value": f"{know_data['knowledge_score'].mean():.1f} ± "
+            f"{know_data['knowledge_score'].std():.1f}",
+        }
+    )
+    know_rows.append(
+        {
+            "Measure": "Mean items attempted",
+            "Value": f"{know_data['knowledge_max'].mean():.1f} / {len(KNOWLEDGE_COLS)}",
+        }
+    )
+    know_rows.append(
+        {
+            "Measure": "Mean percentage correct",
+            "Value": f"{know_data['knowledge_pct'].mean():.1f}%",
+        }
+    )
+    know_rows.append({"Measure": "---", "Value": "---"})
+
+    for cat in ["Good", "Poor"]:
+        n = (know_data["knowledge_category"] == cat).sum()
+        pct = n / len(know_data) * 100
+        know_rows.append(
+            {"Measure": f"{cat} knowledge (n, %)", "Value": f"{n} ({pct:.1f}%)"}
+        )
+
+    table2 = pd.DataFrame(know_rows)
+    tables["Table 2 - Knowledge Scores"] = table2
+
+    print(f"\n\n  TABLE 2: Knowledge Score Distribution")  # noqa: F541
+    print("  " + "─" * 50)
+    print(table2.to_string(index=False))
+
+    # ── Table 3: Attitude Score Distribution ─────────────────────────────
+    att_data = df[df["attitude_score"].notna()]
+    att_mean = att_data["attitude_score"].mean()
+
+    att_rows = []
+    att_rows.append(
+        {"Measure": "Total respondents scored", "Value": f"{len(att_data)}"}
+    )
+    att_rows.append(
+        {
+            "Measure": "Mean attitude score ± SD",
+            "Value": f"{att_data['attitude_score'].mean():.1f} ± "
+            f"{att_data['attitude_score'].std():.1f}",
+        }
+    )
+    att_rows.append(
+        {
+            "Measure": "Score range",
+            "Value": f"{att_data['attitude_score'].min():.0f} – "
+            f"{att_data['attitude_score'].max():.0f}",
+        }
+    )
+    att_rows.append(
+        {
+            "Measure": "Mean items answered",
+            "Value": f"{att_data['attitude_items_answered'].mean():.1f} / "
+            f"{len(ATTITUDE_COLS)}",
+        }
+    )
+    att_rows.append(
+        {"Measure": f"Categorization cutoff (mean)", "Value": f"{att_mean:.1f}"}  # noqa: F541
+    )
+    att_rows.append({"Measure": "---", "Value": "---"})
+
+    for cat in ["Positive", "Negative"]:
+        n = (att_data["attitude_category"] == cat).sum()
+        pct = n / len(att_data) * 100
+        att_rows.append(
+            {"Measure": f"{cat} attitude (n, %)", "Value": f"{n} ({pct:.1f}%)"}
+        )
+
+    table3 = pd.DataFrame(att_rows)
+    tables["Table 3 - Attitude Scores"] = table3
+
+    print(f"\n\n  TABLE 3: Attitude Score Distribution")  # noqa: F541
+    print("  " + "─" * 50)
+    print(table3.to_string(index=False))
+
+    # ── Table 4: HRT Practice Patterns ───────────────────────────────────
+    practice_rows = []
+
+    # HRT awareness and usage
+    practice_items = [
+        ("Aware of any treatment for menopause", "aware_treatment"),
+        ("Aware of HRT", "aware_hrt"),
+        ("Ever used any form of HRT", "ever_used_hrt"),
+        ("Currently using HRT", "on_hrt"),
+        ("Discussed menopause/HRT with healthcare provider", "discussed_hcp"),
+        ("Would like to know more about menopause/HRT", "want_to_know"),
+    ]
+
+    practice_rows.append(
+        {
+            "Variable": "HRT Awareness & Usage",
+            "Category": "",
+            "Frequency (n)": "",
+            "Percentage (%)": "",
+        }
+    )
+
+    for label, key in practice_items:
+        col = PRACTICE_COLS.get(key, "")
+        if col in df.columns:
+            series = df[col].dropna()
+            total = len(series)
+            yes_n = (series == 1).sum()
+            yes_pct = yes_n / total * 100 if total > 0 else 0
+            practice_rows.append(
+                {
+                    "Variable": "",
+                    "Category": label,
+                    "Frequency (n)": f"{yes_n}/{total}",
+                    "Percentage (%)": f"{yes_pct:.1f}",
+                }
+            )
+
+    # Symptom prevalence
+    practice_rows.append(
+        {
+            "Variable": "Genitourinary Symptoms (Yes)",
+            "Category": "",
+            "Frequency (n)": "",
+            "Percentage (%)": "",
+        }
+    )
+
+    for symptom_label, symptom_col in SYMPTOM_COLS.items():
+        if symptom_col in df.columns:
+            series = df[symptom_col].dropna()
+            total = len(series)
+            yes_n = (series == 1).sum()
+            yes_pct = yes_n / total * 100 if total > 0 else 0
+            practice_rows.append(
+                {
+                    "Variable": "",
+                    "Category": symptom_label,
+                    "Frequency (n)": f"{yes_n}/{total}",
+                    "Percentage (%)": f"{yes_pct:.1f}",
+                }
+            )
+
+    # Symptom management
+    practice_rows.append(
+        {
+            "Variable": "Symptom Management Methods",
+            "Category": "",
+            "Frequency (n)": "",
+            "Percentage (%)": "",
+        }
+    )
+
+    for mgmt_label, mgmt_col in MANAGEMENT_COLS.items():
+        if mgmt_col in df.columns:
+            series = df[mgmt_col].dropna()
+            total = len(series)
+            yes_n = (series == 1).sum()
+            yes_pct = yes_n / total * 100 if total > 0 else 0
+            practice_rows.append(
+                {
+                    "Variable": "",
+                    "Category": mgmt_label,
+                    "Frequency (n)": f"{yes_n}/{total}",
+                    "Percentage (%)": f"{yes_pct:.1f}",
+                }
+            )
+
+    table4 = pd.DataFrame(practice_rows)
+    tables["Table 4 - HRT Practices"] = table4
+
+    print(f"\n\n  TABLE 4: HRT Practice Patterns")  # noqa: F541
+    print("  " + "─" * 65)
+    print(table4.to_string(index=False))
+
+    print()
+    return tables
+
+
 def build_excel_files(
     df: pd.DataFrame, chi_results: list[dict]
 ) -> tuple[io.BytesIO, io.BytesIO]:
@@ -642,7 +947,34 @@ def build_excel_files(
     results_buf = io.BytesIO()
     chi_df = pd.DataFrame(chi_results)
 
+    if "significant" in chi_df.columns:
+        chi_df["significant"] = chi_df["significant"].map({True: "Yes", False: "No"})
+
+    chi_df.rename(
+        columns={
+            "demographic": "Demographic Variable",
+            "outcome": "Outcome Variable",
+            "chi2": "Chi-Square (χ²)",
+            "df": "df",
+            "p_value": "p-value",
+            "significant": "Significance",
+            "note": "Note",
+        },
+        inplace=True,
+    )
+
+    # Generate the formatted tables for the Excel export
+    tables = descriptive_stats(df)
+
     with pd.ExcelWriter(results_buf, engine="openpyxl") as writer:
+        # Table 1-4 from descriptive stats
+        for sheet_name, table_df in tables.items():
+            safe_name = sheet_name[:31]
+            table_df.to_excel(writer, sheet_name=safe_name, index=False)
+
+        # Chi-Square sheet
+        chi_df.to_excel(writer, sheet_name="Table 5 - Chi-Square", index=False)
+
         # Scores & Labels sheet
         score_cols = [
             "knowledge_score",
@@ -660,9 +992,6 @@ def build_excel_files(
         label_cols = [c for c in df.columns if c.endswith("_label")]
         export_cols = label_cols + [c for c in score_cols if c in df.columns]
         df[export_cols].to_excel(writer, sheet_name="Scores & Labels", index=False)
-
-        # Chi-Square sheet
-        chi_df.to_excel(writer, sheet_name="Chi-Square Results", index=False)
 
     results_buf.seek(0)
 
