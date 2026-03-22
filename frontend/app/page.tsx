@@ -22,7 +22,7 @@ export default function Home() {
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
-        <div className="container mx-auto flex h-14 items-center justify-between">
+        <div className="container mx-auto flex h-14 items-center justify-between md:px-0 px-4">
           <div className="flex items-center gap-2 font-semibold text-primary flex-1">
             <Activity className="h-5 w-5" />
             <span>Menopause & HRT Study</span>
