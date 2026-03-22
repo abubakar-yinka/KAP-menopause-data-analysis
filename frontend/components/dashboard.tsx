@@ -242,17 +242,29 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
 
       {/* Main Content Tabs */}
       <Tabs defaultValue="knowledge" className="w-full">
-        <TabsList className="grid w-full grid-cols-4 lg:w-[600px] mb-8">
-          <TabsTrigger value="knowledge" className="cursor-pointer">
+        <TabsList className="grid w-full grid-cols-2 lg:grid-cols-4 lg:w-[650px] mb-8 h-auto! gap-1 p-1">
+          <TabsTrigger
+            value="knowledge"
+            className="cursor-pointer whitespace-normal h-auto! py-2 lg:py-1"
+          >
             Knowledge & Attitudes
           </TabsTrigger>
-          <TabsTrigger value="sociodemographics" className="cursor-pointer">
+          <TabsTrigger
+            value="sociodemographics"
+            className="cursor-pointer whitespace-normal h-auto! py-2 lg:py-1"
+          >
             Sociodemographics
           </TabsTrigger>
-          <TabsTrigger value="hrt" className="cursor-pointer">
+          <TabsTrigger
+            value="hrt"
+            className="cursor-pointer whitespace-normal h-auto! py-2 lg:py-1"
+          >
             HRT Practices
           </TabsTrigger>
-          <TabsTrigger value="chisquare" className="cursor-pointer">
+          <TabsTrigger
+            value="chisquare"
+            className="cursor-pointer whitespace-normal h-auto! py-2 lg:py-1"
+          >
             Statistical Tests
           </TabsTrigger>
         </TabsList>
