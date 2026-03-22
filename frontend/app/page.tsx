@@ -7,6 +7,7 @@ import { Dashboard } from "@/components/dashboard";
 import { analyzeFile } from "@/lib/api";
 import { Activity } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { ProgressiveLoader } from "@/components/progressive-loader";
 
 export default function Home() {
   const mutation = useMutation({
@@ -34,7 +35,7 @@ export default function Home() {
       <main className="container mx-auto flex-1 p-4 md:p-8">
         <div className="mx-auto max-w-[1200px]">
           {!mutation.data ? (
-            <div className="mx-auto max-w-2xl text-center mt-12">
+            <div className="mx-auto max-w-2xl text-center mt-12 relative rounded-xl overflow-hidden p-4">
               <h1 className="text-3xl font-bold tracking-tight mb-2">
                 Knowledge & Attitudes Analysis
               </h1>
@@ -49,6 +50,7 @@ export default function Home() {
                 }}
                 isLoading={mutation.isPending}
               />
+              <ProgressiveLoader isLoading={mutation.isPending} />
             </div>
           ) : (
             <Dashboard
