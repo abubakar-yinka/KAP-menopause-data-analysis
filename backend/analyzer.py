@@ -326,7 +326,9 @@ def coalesce_duplicates(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Fix malformed values, coerce types, map labels."""
+    """Fix malformed values, coerce types, map labels, impute NaNs, recode Menopausal status."""
+    import numpy as np
+
     df = df.copy()
 
     # Fix backtick and apostrophe artifacts in attitude columns
@@ -346,83 +348,167 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
             )
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # Proportional Imputation for SOCIO_COLS (Requirement 1)
+    imputation_cols = [
+        "_3_What_is_your_profession",
+        "_4_Marital_status",
+        "_5_Average_monthly_income",
+        "_6_Enrolled_in_health_insurance",
+        "_7_Number_of_children",
+        "_8_Have_you_had_any_in_the_last_3_months",
+    ]
+    for col in imputation_cols:
+        if col in df.columns:
+            non_nulls = df[col].dropna()
+            if len(non_nulls) > 0 and df[col].isnull().sum() > 0:
+                probs = non_nulls.value_counts(normalize=True)
+                missing_mask = df[col].isnull()
+                fill_values = np.random.choice(
+                    probs.index, size=missing_mask.sum(), p=probs.values
+                )
+                df.loc[missing_mask, col] = fill_values
+
     # Map sociodemographic codes to labels
     for col_key, col_name in SOCIO_COLS.items():
         if col_name in df.columns and col_name in SOCIO_LABELS:
             df[f"{col_key}_label"] = df[col_name].map(SOCIO_LABELS[col_name])
 
-    # Map menopausal status
-    status_map = {0: "Premenopausal", 1: "Perimenopausal", 2: "Postmenopausal"}
+    # Recode Menopausal Status (Requirement 2)
     status_col = "_19_Which_of_the_fol_k_best_describes_you"
+    age_col = "_1_Age_in_years"
+
+    def infer_status(row):
+        val = row.get(status_col)
+        age = row.get(age_col)
+
+        # Rule 1: Explicit 1 or 2
+        if pd.notna(val) and val in [1, 2, "1", "2", 1.0, 2.0]:
+            return float(val)
+
+        # Rule 2 & 3: Infer based on age (1=Peri, 2=Post)
+        # SOCIO_LABELS age: 5:"40-44", 4:"45-49" are Peri. 3,2,1 are Post.
+        if pd.notna(age):
+            if float(age) in [4.0, 5.0]:
+                return 1.0  # Peri
+            else:
+                return 2.0  # Post
+        return np.nan
+
+    if status_col in df.columns and age_col in df.columns:
+        df[status_col] = df.apply(infer_status, axis=1)
+
+    status_map = {1.0: "Perimenopausal", 2.0: "Postmenopausal"}
     if status_col in df.columns:
         df["menopausal_status_label"] = df[status_col].map(status_map)
 
     return df
 
 
-def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute knowledge, attitude, and practice scores."""
+def calculate_cronbach_alpha(df_items: pd.DataFrame) -> float:
+    """Calculate Cronbach's Alpha for internal consistency."""
+    k = df_items.shape[1]
+    if k < 2 or len(df_items.dropna()) == 0:
+        return 0.0
+    item_vars = df_items.var(axis=0, ddof=1)
+    total_var = df_items.sum(axis=1).var(ddof=1)
+    if total_var == 0:
+        return 0.0
+    alpha = (k / (k - 1)) * (1 - (item_vars.sum() / total_var))
+    return alpha
+
+
+def compute_split_scores(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute split knowledge/attitude constructs (Meno & HRT) and practice scores."""
     df = df.copy()
 
-    # --- Knowledge scoring ---
-    item_scores = []
-    for col in KNOWLEDGE_COLS:
-        if col not in df.columns:
-            continue
-        correct_code = CORRECT_ANSWER_KEY.get(col)
-        if correct_code is None:
-            continue
+    # Split construct columns
+    idx_know_split = KNOWLEDGE_COLS.index("_59_HRT_can_be_taken_r_used_in_the_vagina")
+    KNOW_MENO_COLS = KNOWLEDGE_COLS[:idx_know_split]
+    KNOW_HRT_COLS = KNOWLEDGE_COLS[idx_know_split:]
 
-        if correct_code == "1_1":
-            scored = df[col].apply(
-                lambda x: 1 if x == 11.0 or x == 2.0 else 0 if pd.notna(x) else np.nan
-            )
-        elif correct_code == "0_1":
-            scored = df[col].apply(
-                lambda x: 1 if x == 1.0 else 0 if pd.notna(x) else np.nan
-            )
-        elif correct_code == "2":
-            scored = df[col].apply(
-                lambda x: 1 if x == 2.0 else 0 if pd.notna(x) else np.nan
-            )
-        elif correct_code == "1":
-            scored = df[col].apply(
-                lambda x: 1 if x == 1.0 else 0 if pd.notna(x) else np.nan
-            )
-        else:
-            numeric = float(correct_code)
-            scored = df[col].apply(
-                lambda x, n=numeric: 1 if x == n else 0 if pd.notna(x) else np.nan
-            )
-        item_scores.append(scored)
+    idx_att_split = ATTITUDE_COLS.index("_88_HRT_will_signifi_y_physical_condition")
+    ATT_MENO_COLS = ATTITUDE_COLS[:idx_att_split]
+    ATT_HRT_COLS = ATTITUDE_COLS[idx_att_split:]
 
-    if item_scores:
-        score_df = pd.concat(item_scores, axis=1)
-        df["knowledge_score"] = score_df.sum(axis=1)
-        df["knowledge_max"] = score_df.notna().sum(axis=1)
-        df["knowledge_pct"] = (df["knowledge_score"] / df["knowledge_max"] * 100).round(
-            1
-        )
+    def score_knowledge_block(cols):
+        scores = []
+        for col in cols:
+            if col not in df.columns:
+                continue
+            ans = CORRECT_ANSWER_KEY.get(col)
+            if not ans:
+                continue
+            if ans == "1_1":
+                scored = df[col].apply(
+                    lambda x: 1 if x in [11.0, 2.0] else 0 if pd.notna(x) else np.nan
+                )
+            elif ans == "0_1":
+                scored = df[col].apply(
+                    lambda x: 1 if x == 1.0 else 0 if pd.notna(x) else np.nan
+                )
+            else:
+                n = float(ans)
+                scored = df[col].apply(
+                    lambda x, n=n: 1 if x == n else 0 if pd.notna(x) else np.nan
+                )
+            scores.append(scored)
+        if scores:
+            return pd.concat(scores, axis=1)
+        return pd.DataFrame(index=df.index)
 
-    # --- Attitude scoring ---
-    att_df = pd.DataFrame(index=df.index)
-    for col in ATTITUDE_COLS:
-        if col not in df.columns:
-            continue
-        values = df[col].copy()
-        if col in REVERSE_SCORED:
-            values = values.apply(
-                lambda x: 6 - x if pd.notna(x) and 1 <= x <= 5 else np.nan
-            )
-        else:
-            values = values.apply(
-                lambda x: x if pd.notna(x) and 1 <= x <= 5 else np.nan
-            )
-        att_df[col] = values
+    def score_attitude_block(cols):
+        att_df = pd.DataFrame(index=df.index)
+        for col in cols:
+            if col not in df.columns:
+                continue
+            vals = df[col].copy()
+            if col in REVERSE_SCORED:
+                vals = vals.apply(
+                    lambda x: 6 - x if pd.notna(x) and 1 <= x <= 5 else np.nan
+                )
+            else:
+                vals = vals.apply(
+                    lambda x: x if pd.notna(x) and 1 <= x <= 5 else np.nan
+                )
+            att_df[col] = vals
+        return att_df
 
-    df["attitude_score"] = att_df.sum(axis=1)
-    df["attitude_max"] = att_df.notna().sum(axis=1) * 5
-    df["attitude_items_answered"] = att_df.notna().sum(axis=1)
+    # Calculate DataFrames
+    df_know_meno = score_knowledge_block(KNOW_MENO_COLS)
+    df_know_hrt = score_knowledge_block(KNOW_HRT_COLS)
+    df_att_meno = score_attitude_block(ATT_MENO_COLS)
+    df_att_hrt = score_attitude_block(ATT_HRT_COLS)
+
+    # Print Cronbach's Alpha (Requirement 3)
+    print("=" * 70)
+    print("RELIABILITY CHECKS (Cronbach's Alpha)")
+    print("=" * 70)
+    print(f"Knowledge of Menopause: {calculate_cronbach_alpha(df_know_meno):.3f}")
+    print(f"Knowledge of HRT:       {calculate_cronbach_alpha(df_know_hrt):.3f}")
+    print(f"Attitude regarding Menopause: {calculate_cronbach_alpha(df_att_meno):.3f}")
+    print(f"Attitude regarding HRT:       {calculate_cronbach_alpha(df_att_hrt):.3f}")
+
+    # Compute Sums
+    df["know_meno_score"] = df_know_meno.sum(axis=1)
+    df["know_hrt_score"] = df_know_hrt.sum(axis=1)
+    df["att_meno_score"] = df_att_meno.sum(axis=1)
+    df["att_hrt_score"] = df_att_hrt.sum(axis=1)
+
+    # Note: Retain overall knowledge/attitude fields to avoid breaking dashboard compatibility,
+    # but base them on sum of sub-scales.
+    df["knowledge_score"] = df["know_meno_score"] + df["know_hrt_score"]
+    df["knowledge_max"] = df_know_meno.notna().sum(axis=1) + df_know_hrt.notna().sum(
+        axis=1
+    )
+    df["knowledge_pct"] = (df["knowledge_score"] / df["knowledge_max"] * 100).round(1)
+
+    df["attitude_score"] = df["att_meno_score"] + df["att_hrt_score"]
+    df["attitude_max"] = (
+        df_att_meno.notna().sum(axis=1) + df_att_hrt.notna().sum(axis=1)
+    ) * 5
+    df["attitude_items_answered"] = df_att_meno.notna().sum(
+        axis=1
+    ) + df_att_hrt.notna().sum(axis=1)
     df["attitude_pct"] = (df["attitude_score"] / df["attitude_max"] * 100).round(1)
 
     # --- Practice variables ---
@@ -448,28 +534,81 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def categorize_variables(df: pd.DataFrame) -> pd.DataFrame:
-    """Create Good/Poor knowledge and Positive/Negative attitude categories."""
+    """Create Good/Poor and Positive/Negative based strictly on cohort means (Requirement 3)."""
     df = df.copy()
 
-    df["knowledge_category"] = df["knowledge_pct"].apply(
+    # Knowledge Menopause Cutoff
+    km_mean = df["know_meno_score"].mean()
+    df["know_meno_category"] = df["know_meno_score"].apply(
         lambda x: (
-            "Good" if pd.notna(x) and x >= 50 else ("Poor" if pd.notna(x) else np.nan)
+            "Good"
+            if pd.notna(x) and x >= km_mean
+            else "Poor"
+            if pd.notna(x)
+            else np.nan
         )
     )
 
-    att_mean = df["attitude_score"].mean()
+    # Knowledge HRT Cutoff
+    kh_mean = df["know_hrt_score"].mean()
+    df["know_hrt_category"] = df["know_hrt_score"].apply(
+        lambda x: (
+            "Good"
+            if pd.notna(x) and x >= kh_mean
+            else "Poor"
+            if pd.notna(x)
+            else np.nan
+        )
+    )
+
+    # Attitude Menopause Cutoff
+    am_mean = df["att_meno_score"].mean()
+    df["att_meno_category"] = df["att_meno_score"].apply(
+        lambda x: (
+            "Positive"
+            if pd.notna(x) and x >= am_mean
+            else "Negative"
+            if pd.notna(x)
+            else np.nan
+        )
+    )
+
+    # Attitude HRT Cutoff
+    ah_mean = df["att_hrt_score"].mean()
+    df["att_hrt_category"] = df["att_hrt_score"].apply(
+        lambda x: (
+            "Positive"
+            if pd.notna(x) and x >= ah_mean
+            else "Negative"
+            if pd.notna(x)
+            else np.nan
+        )
+    )
+
+    # Overall categories (for dashboard compatibility using combined mean)
+    k_mean = df["knowledge_score"].mean()
+    df["knowledge_category"] = df["knowledge_score"].apply(
+        lambda x: (
+            "Good" if pd.notna(x) and x >= k_mean else "Poor" if pd.notna(x) else np.nan
+        )
+    )
+
+    a_mean = df["attitude_score"].mean()
     df["attitude_category"] = df["attitude_score"].apply(
         lambda x: (
             "Positive"
-            if pd.notna(x) and x >= att_mean
-            else ("Negative" if pd.notna(x) else np.nan)
+            if pd.notna(x) and x >= a_mean
+            else "Negative"
+            if pd.notna(x)
+            else np.nan
         )
     )
+
     return df
 
 
 def run_chi_square(df: pd.DataFrame) -> list[dict]:
-    """Run chi-square tests and return results as a list of dicts."""
+    """Run detailed chi-square tests (Requirement 4)."""
     demo_vars = {
         "Age Group": "age_label",
         "Education Level": "education_label",
@@ -477,10 +616,13 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
         "Marital Status": "marital_label",
         "Monthly Income": "income_label",
     }
+    # 5 specific dependent variables
     outcomes = {
-        "Knowledge (Good/Poor)": "knowledge_category",
-        "Attitude (Positive/Negative)": "attitude_category",
-        "HRT Use (Yes/No)": "hrt_current",
+        "Knowledge of Menopause Level": "know_meno_category",
+        "Knowledge of HRT Level": "know_hrt_category",
+        "Attitude towards Menopause Level": "att_meno_category",
+        "Attitude towards HRT Level": "att_hrt_category",
+        "Current HRT Use": "hrt_current",
     }
 
     results = []
@@ -495,7 +637,18 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
             if len(subset) == 0:
                 continue
 
+            # Crosstab for actual testing
             contingency = pd.crosstab(subset[demo_col], subset[outcome_col])
+
+            # Crosstab with margins=True for detailed output
+            detailed_ct = pd.crosstab(
+                subset[demo_col],
+                subset[outcome_col],
+                margins=True,
+                margins_name="Total",
+            )
+            ct_dict = detailed_ct.to_dict()
+
             if contingency.shape[0] < 2 or contingency.shape[1] < 2:
                 results.append(
                     {
@@ -506,6 +659,7 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
                         "p_value": None,
                         "significant": False,
                         "note": "Insufficient categories",
+                        "crosstab": ct_dict,
                     }
                 )
                 continue
@@ -525,6 +679,7 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
                         "p_value": round(p, 4),
                         "significant": bool(p < 0.05),
                         "note": note,
+                        "crosstab": ct_dict,
                     }
                 )
             except Exception as e:
@@ -537,6 +692,7 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
                         "p_value": None,
                         "significant": False,
                         "note": f"Error: {str(e)}",
+                        "crosstab": {"error": str(e)},
                     }
                 )
 
@@ -549,7 +705,7 @@ def build_summary(
     """Build JSON-serializable summary dict for the frontend."""
     n = len(df)
 
-    # Sociodemographics: frequency counts per label
+    # Sociodemographics
     socio = {}
     for key, display_name in SOCIO_DISPLAY_NAMES.items():
         label_col = f"{key}_label"
@@ -557,65 +713,48 @@ def build_summary(
             counts = df[label_col].dropna().value_counts()
             socio[display_name] = {str(k): int(v) for k, v in counts.items()}
 
-    # Menopausal status
     if "menopausal_status_label" in df.columns:
         counts = df["menopausal_status_label"].dropna().value_counts()
-        socio["Menopausal Status"] = {str(k): int(v) for k, v in counts.items()}
+        if len(counts) > 0:
+            socio["Menopausal Status"] = {str(k): int(v) for k, v in counts.items()}
 
-    # Knowledge
-    know = df[df["knowledge_score"].notna()]
-    knowledge = {
-        "mean_score": round(float(know["knowledge_score"].mean()), 1)
-        if len(know)
-        else 0,
-        "mean_max": round(float(know["knowledge_max"].mean()), 1) if len(know) else 0,
-        "mean_pct": round(float(know["knowledge_pct"].mean()), 1) if len(know) else 0,
-        "sd": round(float(know["knowledge_score"].std()), 1) if len(know) else 0,
-        "good_n": int((know["knowledge_category"] == "Good").sum()) if len(know) else 0,
-        "good_pct": round(
-            float((know["knowledge_category"] == "Good").sum() / len(know) * 100), 1
-        )
-        if len(know)
-        else 0,
-        "poor_n": int((know["knowledge_category"] == "Poor").sum()) if len(know) else 0,
-        "poor_pct": round(
-            float((know["knowledge_category"] == "Poor").sum() / len(know) * 100), 1
-        )
-        if len(know)
-        else 0,
-    }
+    # Helper function to generate stats dict for sub-constructs
+    def get_construct_stats(df_data, score_col, cat_col, is_knowledge=True):
+        subset = df_data[df_data[score_col].notna()]
+        if len(subset) == 0:
+            if is_knowledge:
+                return {"good_n": 0, "good_pct": 0, "poor_n": 0, "poor_pct": 0}
+            else:
+                return {"positive_n": 0, "positive_pct": 0, "negative_n": 0, "negative_pct": 0}
+        
+        cats = ["Good", "Poor"] if is_knowledge else ["Positive", "Negative"]
+        n1 = int((subset[cat_col] == cats[0]).sum())
+        n2 = int((subset[cat_col] == cats[1]).sum())
+        
+        if is_knowledge:
+            return {
+                "good_n": n1,
+                "good_pct": round(float(n1 / len(subset) * 100), 1),
+                "poor_n": n2,
+                "poor_pct": round(float(n2 / len(subset) * 100), 1)
+            }
+        else:
+            return {
+                "positive_n": n1,
+                "positive_pct": round(float(n1 / len(subset) * 100), 1),
+                "negative_n": n2,
+                "negative_pct": round(float(n2 / len(subset) * 100), 1)
+            }
 
-    # Attitude
-    att = df[df["attitude_score"].notna()]
-    attitude = {
-        "mean_score": round(float(att["attitude_score"].mean()), 1) if len(att) else 0,
-        "mean_max": round(float(att["attitude_max"].mean()), 1) if len(att) else 0,
-        "mean_pct": round(float(att["attitude_pct"].mean()), 1) if len(att) else 0,
-        "sd": round(float(att["attitude_score"].std()), 1) if len(att) else 0,
-        "positive_n": int((att["attitude_category"] == "Positive").sum())
-        if len(att)
-        else 0,
-        "positive_pct": round(
-            float((att["attitude_category"] == "Positive").sum() / len(att) * 100), 1
-        )
-        if len(att)
-        else 0,
-        "negative_n": int((att["attitude_category"] == "Negative").sum())
-        if len(att)
-        else 0,
-        "negative_pct": round(
-            float((att["attitude_category"] == "Negative").sum() / len(att) * 100), 1
-        )
-        if len(att)
-        else 0,
+    constructs = {
+        "knowledge_menopause": get_construct_stats(df, "know_meno_score", "know_meno_category", True),
+        "knowledge_hrt": get_construct_stats(df, "know_hrt_score", "know_hrt_category", True),
+        "attitude_menopause": get_construct_stats(df, "att_meno_score", "att_meno_category", False),
+        "attitude_hrt": get_construct_stats(df, "att_hrt_score", "att_hrt_category", False),
     }
 
     # HRT practice
-    hrt_counts = (
-        df["hrt_practice"].value_counts()
-        if "hrt_practice" in df.columns
-        else pd.Series()
-    )
+    hrt_counts = df["hrt_practice"].value_counts() if "hrt_practice" in df.columns else pd.Series()
     hrt_practice = {
         "currently_using": int(hrt_counts.get("Currently using HRT", 0)),
         "previously_used": int(hrt_counts.get("Previously used HRT", 0)),
@@ -627,9 +766,8 @@ def build_summary(
         "total_submissions": n_total,
         "excluded": n_excluded,
         "sociodemographics": socio,
-        "knowledge": knowledge,
-        "attitude": attitude,
-        "hrt_practice": hrt_practice,
+        "constructs": constructs,
+        "hrt_practices": hrt_practice,
         "chi_square": chi_results,
     }
 
@@ -638,15 +776,14 @@ def descriptive_stats(df):
     """
     Generate publication-ready descriptive statistics tables:
 
-    Table 1: Sociodemographic characteristics (frequencies & percentages)
-    Table 2: Knowledge score distribution
-    Table 3: Attitude score distribution
-    Table 4: HRT practice patterns
+    Table 1: Sociodemographic characteristics
+    Table 2: Knowledge of Menopause
+    Table 3: Knowledge of HRT
+    Table 4: Attitude towards Menopause
+    Table 5: Attitude towards HRT
+    Table 6: HRT practice patterns
 
     Returns: dict of DataFrames (table_name → DataFrame)
-
-    JS analogy: Like building summary objects with .reduce(), then formatting
-    them as arrays of {variable, frequency, percentage} objects.
     """
     print("=" * 70)
     print("PHASE 3: Generating descriptive statistics...")
@@ -733,117 +870,59 @@ def descriptive_stats(df):
         )
         for cat in ["Premenopausal", "Perimenopausal", "Postmenopausal"]:
             n = counts.get(cat, 0)
-            pct = n / total * 100 if total > 0 else 0
-            rows.append(
-                {
-                    "Variable": "",
-                    "Category": cat,
-                    "Frequency (n)": n,
-                    "Percentage (%)": f"{pct:.1f}",
-                }
-            )
+            if float(n) > 0:
+                pct = n / total * 100
+                rows.append(
+                    {
+                        "Variable": "",
+                        "Category": cat,
+                        "Frequency (n)": n,
+                        "Percentage (%)": f"{pct:.1f}",
+                    }
+                )
 
     table1 = pd.DataFrame(rows)
     tables["Table 1 - Sociodemographics"] = table1
 
-    print("\n  TABLE 1: Sociodemographic Characteristics of Respondents")
-    print("  " + "─" * 65)
-    print(table1.to_string(index=False))
+    # Generic function to build construct tables
+    def build_construct_table(score_col, cat_col, total_items, is_knowledge=True, title=""):
+        data = df[df[score_col].notna()]
+        if len(data) == 0:
+            return pd.DataFrame()
+            
+        mean_score = data[score_col].mean()
+        std_score = data[score_col].std()
+        
+        c_rows = []
+        c_rows.append({"Measure": "Total respondents scored", "Value": f"{len(data)}"})
+        c_rows.append({"Measure": "Mean score ± SD", "Value": f"{mean_score:.1f} ± {std_score:.1f}"})
+        c_rows.append({"Measure": "Items evaluated", "Value": f"{total_items}"})
+        
+        if not is_knowledge:
+            c_rows.append({"Measure": "Score range", "Value": f"{data[score_col].min():.0f} - {data[score_col].max():.0f}"})
+        
+        c_rows.append({"Measure": "Categorization cutoff (mean)", "Value": f"{mean_score:.1f}"})
+        c_rows.append({"Measure": "---", "Value": "---"})
+        
+        cats = ["Good", "Poor"] if is_knowledge else ["Positive", "Negative"]
+        for cat in cats:
+            n = (data[cat_col] == cat).sum()
+            pct = n / len(data) * 100 if len(data) > 0 else 0
+            c_rows.append({"Measure": f"{cat} (n, %)", "Value": f"{n} ({pct:.1f}%)"})
+            
+        return pd.DataFrame(c_rows)
 
-    # ── Table 2: Knowledge Score Distribution ────────────────────────────
-    know_data = df[df["knowledge_score"].notna()]
+    idx_know = KNOWLEDGE_COLS.index("_59_HRT_can_be_taken_r_used_in_the_vagina")
+    idx_att = ATTITUDE_COLS.index("_88_HRT_will_signifi_y_physical_condition")
 
-    know_rows = []
-    know_rows.append(
-        {"Measure": "Total respondents scored", "Value": f"{len(know_data)}"}
-    )
-    know_rows.append(
-        {
-            "Measure": "Mean knowledge score ± SD",
-            "Value": f"{know_data['knowledge_score'].mean():.1f} ± "
-            f"{know_data['knowledge_score'].std():.1f}",
-        }
-    )
-    know_rows.append(
-        {
-            "Measure": "Mean items attempted",
-            "Value": f"{know_data['knowledge_max'].mean():.1f} / {len(KNOWLEDGE_COLS)}",
-        }
-    )
-    know_rows.append(
-        {
-            "Measure": "Mean percentage correct",
-            "Value": f"{know_data['knowledge_pct'].mean():.1f}%",
-        }
-    )
-    know_rows.append({"Measure": "---", "Value": "---"})
+    tables["Table 2 - Know_Menopause"] = build_construct_table("know_meno_score", "know_meno_category", len(KNOWLEDGE_COLS[:idx_know]), True)
+    tables["Table 3 - Know_HRT"] = build_construct_table("know_hrt_score", "know_hrt_category", len(KNOWLEDGE_COLS[idx_know:]), True)
+    tables["Table 4 - Att_Menopause"] = build_construct_table("att_meno_score", "att_meno_category", len(ATTITUDE_COLS[:idx_att]), False)
+    tables["Table 5 - Att_HRT"] = build_construct_table("att_hrt_score", "att_hrt_category", len(ATTITUDE_COLS[idx_att:]), False)
 
-    for cat in ["Good", "Poor"]:
-        n = (know_data["knowledge_category"] == cat).sum()
-        pct = n / len(know_data) * 100
-        know_rows.append(
-            {"Measure": f"{cat} knowledge (n, %)", "Value": f"{n} ({pct:.1f}%)"}
-        )
-
-    table2 = pd.DataFrame(know_rows)
-    tables["Table 2 - Knowledge Scores"] = table2
-
-    print(f"\n\n  TABLE 2: Knowledge Score Distribution")  # noqa: F541
-    print("  " + "─" * 50)
-    print(table2.to_string(index=False))
-
-    # ── Table 3: Attitude Score Distribution ─────────────────────────────
-    att_data = df[df["attitude_score"].notna()]
-    att_mean = att_data["attitude_score"].mean()
-
-    att_rows = []
-    att_rows.append(
-        {"Measure": "Total respondents scored", "Value": f"{len(att_data)}"}
-    )
-    att_rows.append(
-        {
-            "Measure": "Mean attitude score ± SD",
-            "Value": f"{att_data['attitude_score'].mean():.1f} ± "
-            f"{att_data['attitude_score'].std():.1f}",
-        }
-    )
-    att_rows.append(
-        {
-            "Measure": "Score range",
-            "Value": f"{att_data['attitude_score'].min():.0f} – "
-            f"{att_data['attitude_score'].max():.0f}",
-        }
-    )
-    att_rows.append(
-        {
-            "Measure": "Mean items answered",
-            "Value": f"{att_data['attitude_items_answered'].mean():.1f} / "
-            f"{len(ATTITUDE_COLS)}",
-        }
-    )
-    att_rows.append(
-        {"Measure": f"Categorization cutoff (mean)", "Value": f"{att_mean:.1f}"}  # noqa: F541
-    )
-    att_rows.append({"Measure": "---", "Value": "---"})
-
-    for cat in ["Positive", "Negative"]:
-        n = (att_data["attitude_category"] == cat).sum()
-        pct = n / len(att_data) * 100
-        att_rows.append(
-            {"Measure": f"{cat} attitude (n, %)", "Value": f"{n} ({pct:.1f}%)"}
-        )
-
-    table3 = pd.DataFrame(att_rows)
-    tables["Table 3 - Attitude Scores"] = table3
-
-    print(f"\n\n  TABLE 3: Attitude Score Distribution")  # noqa: F541
-    print("  " + "─" * 50)
-    print(table3.to_string(index=False))
-
-    # ── Table 4: HRT Practice Patterns ───────────────────────────────────
+    # ── Table 6: HRT Practice Patterns ───────────────────────────────────
     practice_rows = []
 
-    # HRT awareness and usage
     practice_items = [
         ("Aware of any treatment for menopause", "aware_treatment"),
         ("Aware of HRT", "aware_hrt"),
@@ -853,14 +932,7 @@ def descriptive_stats(df):
         ("Would like to know more about menopause/HRT", "want_to_know"),
     ]
 
-    practice_rows.append(
-        {
-            "Variable": "HRT Awareness & Usage",
-            "Category": "",
-            "Frequency (n)": "",
-            "Percentage (%)": "",
-        }
-    )
+    practice_rows.append({"Variable": "HRT Awareness & Usage", "Category": "", "Frequency (n)": "", "Percentage (%)": ""})
 
     for label, key in practice_items:
         col = PRACTICE_COLS.get(key, "")
@@ -869,24 +941,9 @@ def descriptive_stats(df):
             total = len(series)
             yes_n = (series == 1).sum()
             yes_pct = yes_n / total * 100 if total > 0 else 0
-            practice_rows.append(
-                {
-                    "Variable": "",
-                    "Category": label,
-                    "Frequency (n)": f"{yes_n}/{total}",
-                    "Percentage (%)": f"{yes_pct:.1f}",
-                }
-            )
+            practice_rows.append({"Variable": "", "Category": label, "Frequency (n)": f"{yes_n}/{total}", "Percentage (%)": f"{yes_pct:.1f}"})
 
-    # Symptom prevalence
-    practice_rows.append(
-        {
-            "Variable": "Genitourinary Symptoms (Yes)",
-            "Category": "",
-            "Frequency (n)": "",
-            "Percentage (%)": "",
-        }
-    )
+    practice_rows.append({"Variable": "Genitourinary Symptoms (Yes)", "Category": "", "Frequency (n)": "", "Percentage (%)": ""})
 
     for symptom_label, symptom_col in SYMPTOM_COLS.items():
         if symptom_col in df.columns:
@@ -894,24 +951,9 @@ def descriptive_stats(df):
             total = len(series)
             yes_n = (series == 1).sum()
             yes_pct = yes_n / total * 100 if total > 0 else 0
-            practice_rows.append(
-                {
-                    "Variable": "",
-                    "Category": symptom_label,
-                    "Frequency (n)": f"{yes_n}/{total}",
-                    "Percentage (%)": f"{yes_pct:.1f}",
-                }
-            )
+            practice_rows.append({"Variable": "", "Category": symptom_label, "Frequency (n)": f"{yes_n}/{total}", "Percentage (%)": f"{yes_pct:.1f}"})
 
-    # Symptom management
-    practice_rows.append(
-        {
-            "Variable": "Symptom Management Methods",
-            "Category": "",
-            "Frequency (n)": "",
-            "Percentage (%)": "",
-        }
-    )
+    practice_rows.append({"Variable": "Symptom Management Methods", "Category": "", "Frequency (n)": "", "Percentage (%)": ""})
 
     for mgmt_label, mgmt_col in MANAGEMENT_COLS.items():
         if mgmt_col in df.columns:
@@ -919,23 +961,10 @@ def descriptive_stats(df):
             total = len(series)
             yes_n = (series == 1).sum()
             yes_pct = yes_n / total * 100 if total > 0 else 0
-            practice_rows.append(
-                {
-                    "Variable": "",
-                    "Category": mgmt_label,
-                    "Frequency (n)": f"{yes_n}/{total}",
-                    "Percentage (%)": f"{yes_pct:.1f}",
-                }
-            )
+            practice_rows.append({"Variable": "", "Category": mgmt_label, "Frequency (n)": f"{yes_n}/{total}", "Percentage (%)": f"{yes_pct:.1f}"})
 
-    table4 = pd.DataFrame(practice_rows)
-    tables["Table 4 - HRT Practices"] = table4
+    tables["Table 6 - HRT Practices"] = pd.DataFrame(practice_rows)
 
-    print(f"\n\n  TABLE 4: HRT Practice Patterns")  # noqa: F541
-    print("  " + "─" * 65)
-    print(table4.to_string(index=False))
-
-    print()
     return tables
 
 
@@ -945,46 +974,106 @@ def build_excel_files(
     """Write results and cleaned data to in-memory Excel buffers."""
     # --- results_output.xlsx ---
     results_buf = io.BytesIO()
-    chi_df = pd.DataFrame(chi_results)
+    
+    # Rebuild Chi-Square Table (Requirement 4 detailed breakdown)
+    chi_rows = []
+    for test in chi_results:
+        demo_name = test.get("demographic", "")
+        outcome_name = test.get("outcome", "")
+        chi2 = test.get("chi2", "")
+        dof = test.get("df", "")
+        p_val = test.get("p_value", "")
+        sig = "Yes" if test.get("significant") else "No"
+        note = test.get("note", "")
+        ct = test.get("crosstab", {})
 
-    if "significant" in chi_df.columns:
-        chi_df["significant"] = chi_df["significant"].map({True: "Yes", False: "No"})
+        if not ct or "error" in ct:
+            chi_rows.append({
+                "Demographic Variable": demo_name,
+                "Category": "Error / Insufficient data",
+                "Outcome Variable": outcome_name,
+                "Result 1": "",
+                "Result 2": "",
+                "Chi-Square (χ²)": chi2,
+                "df": dof,
+                "p-value": p_val,
+                "Significance": sig,
+                "Note": note
+            })
+            continue
 
-    chi_df.rename(
-        columns={
-            "demographic": "Demographic Variable",
-            "outcome": "Outcome Variable",
-            "chi2": "Chi-Square (χ²)",
-            "df": "df",
-            "p_value": "p-value",
-            "significant": "Significance",
-            "note": "Note",
-        },
-        inplace=True,
-    )
+        # Extract outcome categories (e.g. ['Good', 'Poor'] or ['Positive', 'Negative'])
+        # excluding 'Total'
+        outcome_cats = [k for k in ct.keys() if k != "Total"]
+        
+        # Determine the independent variable categories (e.g. '40-44', '45-49')
+        # by looking at the keys of the first outcome category, excluding 'Total'
+        if not outcome_cats:
+            continue
+            
+        demo_cats = [k for k in ct[outcome_cats[0]].keys() if k != "Total"]
+        # Add 'Total' to the end for the grand total row
+        demo_cats.append("Total")
+
+        for i, d_cat in enumerate(demo_cats):
+            row = {}
+            # Only print the overall test stats on the first row of this block
+            if i == 0:
+                row["Demographic Variable"] = demo_name
+                row["Outcome Variable"] = outcome_name
+                row["Chi-Square (χ²)"] = chi2
+                row["df"] = dof
+                row["p-value"] = p_val
+                row["Significance"] = sig
+                row["Note"] = note
+            else:
+                row["Demographic Variable"] = ""
+                row["Outcome Variable"] = ""
+                row["Chi-Square (χ²)"] = ""
+                row["df"] = ""
+                row["p-value"] = ""
+                row["Significance"] = ""
+                row["Note"] = ""
+                
+            row["Category"] = d_cat
+            
+            # calculate N and % for each outcome
+            for j, o_cat in enumerate(outcome_cats):
+                col_name = f"{o_cat} n(%)"
+                val = ct[o_cat].get(d_cat, 0)
+                tot = ct["Total"].get(d_cat, 0)
+                pct = (val / tot * 100) if tot > 0 else 0
+                row[col_name] = f"{val} ({pct:.1f}%)"
+                
+            chi_rows.append(row)
+
+    chi_df = pd.DataFrame(chi_rows)
+
+    # Reorder columns to make 'Category' and 'Results' appear before the Chi-stats
+    if not chi_df.empty:
+        base_cols = ["Demographic Variable", "Category", "Outcome Variable"]
+        stats_cols = ["Chi-Square (χ²)", "df", "p-value", "Significance", "Note"]
+        dynamic_cols = [c for c in chi_df.columns if c not in base_cols + stats_cols]
+        chi_df = chi_df[base_cols + dynamic_cols + stats_cols]
 
     # Generate the formatted tables for the Excel export
     tables = descriptive_stats(df)
 
     with pd.ExcelWriter(results_buf, engine="openpyxl") as writer:
-        # Table 1-4 from descriptive stats
+        # Tables 1-6 from descriptive stats
         for sheet_name, table_df in tables.items():
             safe_name = sheet_name[:31]
             table_df.to_excel(writer, sheet_name=safe_name, index=False)
 
-        # Chi-Square sheet
-        chi_df.to_excel(writer, sheet_name="Table 5 - Chi-Square", index=False)
+        # Table 7 - Chi-Square sheet
+        chi_df.to_excel(writer, sheet_name="Table 7 - Chi-Square", index=False)
 
         # Scores & Labels sheet
         score_cols = [
-            "knowledge_score",
-            "knowledge_max",
-            "knowledge_pct",
-            "knowledge_category",
-            "attitude_score",
-            "attitude_max",
-            "attitude_pct",
-            "attitude_category",
+            "know_meno_score",
+            "know_hrt_score",
+            "att_meno_score",
+            "att_hrt_score",
             "hrt_practice",
             "hrt_current",
             "hrt_ever",
@@ -1031,7 +1120,7 @@ def run_pipeline(df: pd.DataFrame) -> dict:
     df = clean_data(df)
 
     # Step 4: Score & categorize
-    df = compute_scores(df)
+    df = compute_split_scores(df)
     df = categorize_variables(df)
 
     # Step 5: Chi-square tests
