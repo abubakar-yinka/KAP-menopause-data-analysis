@@ -17,15 +17,6 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import {
   PieChart,
   Pie,
@@ -41,6 +32,7 @@ import {
 } from "recharts";
 
 import type { AnalysisResult } from "@/lib/types";
+import { DetailedChiSquareTable } from "@/components/detailed-chi-square";
 import { getDownloadUrl } from "@/lib/api";
 
 const COLORS = ["#0d9488", "#14b8a6", "#5eead4", "#99f6e4", "#ccfbf1"];
@@ -81,36 +73,60 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
   };
 
   // Prepare chart data format
-  const knowledgeData = [
+  const knowledgeMenoData = [
     {
       name: "Good",
-      value: summary.knowledge.good_pct,
-      count: summary.knowledge.good_n,
+      value: summary.constructs.knowledge_menopause.good_pct || 0,
+      count: summary.constructs.knowledge_menopause.good_n || 0,
     },
     {
       name: "Poor",
-      value: summary.knowledge.poor_pct,
-      count: summary.knowledge.poor_n,
+      value: summary.constructs.knowledge_menopause.poor_pct || 0,
+      count: summary.constructs.knowledge_menopause.poor_n || 0,
+    },
+  ];
+  const knowledgeHrtData = [
+    {
+      name: "Good",
+      value: summary.constructs.knowledge_hrt.good_pct || 0,
+      count: summary.constructs.knowledge_hrt.good_n || 0,
+    },
+    {
+      name: "Poor",
+      value: summary.constructs.knowledge_hrt.poor_pct || 0,
+      count: summary.constructs.knowledge_hrt.poor_n || 0,
     },
   ];
 
-  const attitudeData = [
+  const attMenoData = [
     {
       name: "Positive",
-      value: summary.attitude.positive_pct,
-      count: summary.attitude.positive_n,
+      value: summary.constructs.attitude_menopause.positive_pct || 0,
+      count: summary.constructs.attitude_menopause.positive_n || 0,
     },
     {
       name: "Negative",
-      value: summary.attitude.negative_pct,
-      count: summary.attitude.negative_n,
+      value: summary.constructs.attitude_menopause.negative_pct || 0,
+      count: summary.constructs.attitude_menopause.negative_n || 0,
+    },
+  ];
+  const attHrtData = [
+    {
+      name: "Positive",
+      value: summary.constructs.attitude_hrt.positive_pct || 0,
+      count: summary.constructs.attitude_hrt.positive_n || 0,
+    },
+    {
+      name: "Negative",
+      value: summary.constructs.attitude_hrt.negative_pct || 0,
+      count: summary.constructs.attitude_hrt.negative_n || 0,
     },
   ];
 
   const hrtData = [
-    { name: "Currently Using", value: summary.hrt_practice.currently_using },
-    { name: "Previously Used", value: summary.hrt_practice.previously_used },
-    { name: "Never Used", value: summary.hrt_practice.never_used },
+    { name: "Currently Using", value: summary.hrt_practices.currently_using },
+    { name: "Previously Used", value: summary.hrt_practices.previously_used },
+    { name: "Never Used", value: summary.hrt_practices.never_used },
   ];
 
   // Prepare socio chart data wrapper
@@ -169,7 +185,7 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">
@@ -188,34 +204,64 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">
-              Good Knowledge
+              Good Knowledge (Menopause)
             </CardTitle>
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {summary.knowledge.good_pct}%
+              {summary.constructs.knowledge_menopause.good_pct}%
             </div>
             <p className="text-xs text-muted-foreground pt-1">
-              Mean score: {summary.knowledge.mean_score} /{" "}
-              {summary.knowledge.mean_max}
+              {summary.constructs.knowledge_menopause.good_n} subjects
             </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">
-              Positive Attitude
+              Good Knowledge (HRT)
             </CardTitle>
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {summary.attitude.positive_pct}%
+              {summary.constructs.knowledge_hrt.good_pct}%
             </div>
             <p className="text-xs text-muted-foreground pt-1">
-              Mean score: {summary.attitude.mean_score} /{" "}
-              {summary.attitude.mean_max}
+              {summary.constructs.knowledge_hrt.good_n} subjects
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Positive Attitude (Menopause)
+            </CardTitle>
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {summary.constructs.attitude_menopause.positive_pct}%
+            </div>
+            <p className="text-xs text-muted-foreground pt-1">
+              {summary.constructs.attitude_menopause.positive_n} subjects
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Positive Attitude (HRT)
+            </CardTitle>
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {summary.constructs.attitude_hrt.positive_pct}%
+            </div>
+            <p className="text-xs text-muted-foreground pt-1">
+              {summary.constructs.attitude_hrt.positive_n} subjects
             </p>
           </CardContent>
         </Card>
@@ -227,14 +273,14 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
           <CardContent>
             <div className="text-2xl font-bold">
               {(
-                (summary.hrt_practice.currently_using /
+                (summary.hrt_practices.currently_using /
                   summary.total_respondents) *
                 100
               ).toFixed(1)}
               %
             </div>
             <p className="text-xs text-muted-foreground pt-1">
-              Currently using ({summary.hrt_practice.currently_using} women)
+              Currently using ({summary.hrt_practices.currently_using} women)
             </p>
           </CardContent>
         </Card>
@@ -242,18 +288,24 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
 
       {/* Main Content Tabs */}
       <Tabs defaultValue="knowledge" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 lg:grid-cols-4 lg:w-[650px] mb-8 h-auto! gap-1 p-1">
-          <TabsTrigger
-            value="knowledge"
-            className="cursor-pointer whitespace-normal h-auto! py-2 lg:py-1"
-          >
-            Knowledge & Attitudes
-          </TabsTrigger>
+        <TabsList className="grid w-full grid-cols-2 lg:grid-cols-5 lg:w-[850px] mb-8 h-auto! gap-1 p-1">
           <TabsTrigger
             value="sociodemographics"
             className="cursor-pointer whitespace-normal h-auto! py-2 lg:py-1"
           >
             Sociodemographics
+          </TabsTrigger>
+          <TabsTrigger
+            value="knowledge"
+            className="cursor-pointer whitespace-normal h-auto! py-2 lg:py-1"
+          >
+            Knowledge
+          </TabsTrigger>
+          <TabsTrigger
+            value="attitudes"
+            className="cursor-pointer whitespace-normal h-auto! py-2 lg:py-1"
+          >
+            Attitudes
           </TabsTrigger>
           <TabsTrigger
             value="hrt"
@@ -269,12 +321,12 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
           </TabsTrigger>
         </TabsList>
 
-        {/* TAB 1: Knowledge & Attitudes */}
+        {/* TAB 1: Knowledge */}
         <TabsContent value="knowledge" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             <Card className="col-span-1 border-muted">
               <CardHeader>
-                <CardTitle>Knowledge Distribution</CardTitle>
+                <CardTitle>Knowledge of Menopause</CardTitle>
                 <CardDescription>
                   Percentage of Good vs Poor knowledge
                 </CardDescription>
@@ -282,7 +334,7 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
               <CardContent className="h-[350px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
-                    data={knowledgeData}
+                    data={knowledgeMenoData}
                     layout="vertical"
                     margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
                   >
@@ -301,7 +353,7 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
                       ]}
                     />
                     <Bar dataKey="value" name="Percentage">
-                      {knowledgeData.map((entry, index) => (
+                      {knowledgeMenoData.map((entry, index) => (
                         <Cell
                           key={`cell-${index}`}
                           fill={
@@ -317,15 +369,15 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
 
             <Card className="col-span-1 border-muted">
               <CardHeader>
-                <CardTitle>Attitude Distribution</CardTitle>
+                <CardTitle>Knowledge of HRT</CardTitle>
                 <CardDescription>
-                  Percentage of Positive vs Negative attitude
+                  Percentage of Good vs Poor knowledge
                 </CardDescription>
               </CardHeader>
               <CardContent className="h-[350px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
-                    data={attitudeData}
+                    data={knowledgeHrtData}
                     layout="vertical"
                     margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
                   >
@@ -344,7 +396,96 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
                       ]}
                     />
                     <Bar dataKey="value" name="Percentage">
-                      {attitudeData.map((entry, index) => (
+                      {knowledgeHrtData.map((entry, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={
+                            KNOWLEDGE_COLORS[index % KNOWLEDGE_COLORS.length]
+                          }
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* TAB: Attitudes */}
+        <TabsContent value="attitudes" className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <Card className="col-span-1 border-muted">
+              <CardHeader>
+                <CardTitle>Attitude towards Menopause</CardTitle>
+                <CardDescription>
+                  Percentage of Positive vs Negative attitude
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-[350px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={attMenoData}
+                    layout="vertical"
+                    margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis
+                      type="number"
+                      dataKey="value"
+                      unit="%"
+                      domain={[0, 100]}
+                    />
+                    <YAxis type="category" dataKey="name" />
+                    <Tooltip
+                      formatter={(value, name, props) => [
+                        `${value}% (${props.payload.count} subjects)`,
+                        "Result",
+                      ]}
+                    />
+                    <Bar dataKey="value" name="Percentage">
+                      {attMenoData.map((entry, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={ATTITUDE_COLORS[index % ATTITUDE_COLORS.length]}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card className="col-span-1 border-muted">
+              <CardHeader>
+                <CardTitle>Attitude towards HRT</CardTitle>
+                <CardDescription>
+                  Percentage of Positive vs Negative attitude
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-[350px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={attHrtData}
+                    layout="vertical"
+                    margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis
+                      type="number"
+                      dataKey="value"
+                      unit="%"
+                      domain={[0, 100]}
+                    />
+                    <YAxis type="category" dataKey="name" />
+                    <Tooltip
+                      formatter={(value, name, props) => [
+                        `${value}% (${props.payload.count} subjects)`,
+                        "Result",
+                      ]}
+                    />
+                    <Bar dataKey="value" name="Percentage">
+                      {attHrtData.map((entry, index) => (
                         <Cell
                           key={`cell-${index}`}
                           fill={ATTITUDE_COLORS[index % ATTITUDE_COLORS.length]}
@@ -451,68 +592,16 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
         <TabsContent value="chisquare" className="space-y-4">
           <Card className="border-muted">
             <CardHeader>
-              <CardTitle>Statistical Associations (Chi-Square)</CardTitle>
+              <CardTitle>
+                Detailed Statistical Associations (Chi-Square)
+              </CardTitle>
               <CardDescription>
-                Demographic factors associated with Knowledge, Attitude, and HRT
-                use.
+                Inferential analysis of demographic factors associated with
+                Menopause and HRT outcomes.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Demographic</TableHead>
-                    <TableHead>Outcome Measure</TableHead>
-                    <TableHead className="text-right">
-                      Chi-Square (χ²)
-                    </TableHead>
-                    <TableHead className="text-right">df</TableHead>
-                    <TableHead className="text-right">p-value</TableHead>
-                    <TableHead className="text-center">Significance</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {summary.chi_square.map((row, idx) => (
-                    <TableRow key={idx}>
-                      <TableCell className="font-medium">
-                        {row.demographic}
-                      </TableCell>
-                      <TableCell>{row.outcome}</TableCell>
-                      <TableCell className="text-right">
-                        {row.chi2?.toFixed(3) || "N/A"}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {row.df || "-"}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-sm">
-                        {row.p_value !== null ? row.p_value.toFixed(4) : "N/A"}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        {row.significant ? (
-                          <Badge
-                            variant="default"
-                            className="bg-emerald-500 hover:bg-emerald-600"
-                          >
-                            Significant
-                          </Badge>
-                        ) : (
-                          <Badge
-                            variant="secondary"
-                            className="text-muted-foreground font-normal"
-                          >
-                            Not Sig.
-                          </Badge>
-                        )}
-                        {row.note && (
-                          <span className="block text-xs text-muted-foreground mt-1">
-                            {row.note}
-                          </span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <DetailedChiSquareTable results={summary.chi_square} />
             </CardContent>
           </Card>
         </TabsContent>
