@@ -12,10 +12,14 @@ export interface AnalysisSummary {
 
   sociodemographics: Record<string, Record<string, number>>;
 
-  knowledge: ScoreData;
-  attitude: ScoreData;
+  constructs: {
+    knowledge_menopause: ConstructScoreData;
+    knowledge_hrt: ConstructScoreData;
+    attitude_menopause: ConstructScoreData;
+    attitude_hrt: ConstructScoreData;
+  };
 
-  hrt_practice: {
+  hrt_practices: {
     currently_using: number;
     previously_used: number;
     never_used: number;
@@ -24,11 +28,7 @@ export interface AnalysisSummary {
   chi_square: ChiSquareResult[];
 }
 
-export interface ScoreData {
-  mean_score: number;
-  mean_max: number;
-  mean_pct: number;
-  sd: number;
+export interface ConstructScoreData {
   good_n?: number;
   good_pct?: number;
   poor_n?: number;
@@ -47,4 +47,5 @@ export interface ChiSquareResult {
   p_value: number | null;
   significant: boolean;
   note: string;
+  crosstab?: Record<string, Record<string, number>>;
 }
