@@ -70,6 +70,7 @@ SOCIO_DISPLAY_NAMES = {
 
 KNOWLEDGE_COLS = [
     "_25_Menopause_is_a_natural_bio",
+    "_26_The_main_symptoms_of_menopause",
     "_27_Regular_exercise_menopausal_symptoms",
     "_28_Balance_diet_ric_lth_during_menopause",
     "_29_Some_plant_based_menopausal_symptoms",
@@ -108,6 +109,7 @@ KNOWLEDGE_COLS = [
     "_62_HRT_can_help_red_ion_more_comfortable",
     "_63_HRT_can_help_red_lood_vessel_diseases",
     "_64_HRT_may_help_red_r_of_the_womb_uterus",
+    "_65_HRT_may_potentia_side_effects_such_as",
     "_66_HRT_may_lead_to_weight_gain",
     "_67_HRT_may_increase_isk_of_breast_cancer",
     "_68_HRT_may_reduce_t_risk_of_colon_cancer",
@@ -119,6 +121,7 @@ KNOWLEDGE_COLS = [
 
 CORRECT_ANSWER_KEY = {
     "_25_Menopause_is_a_natural_bio": "2",
+    "_26_The_main_symptoms_of_menopause": "MULTI",
     "_27_Regular_exercise_menopausal_symptoms": "1_1",
     "_28_Balance_diet_ric_lth_during_menopause": "1_1",
     "_29_Some_plant_based_menopausal_symptoms": "1_1",
@@ -426,13 +429,33 @@ def compute_split_scores(df: pd.DataFrame) -> pd.DataFrame:
     KNOW_MENO_COLS = KNOWLEDGE_COLS[:idx_know_split]
     KNOW_HRT_COLS = KNOWLEDGE_COLS[idx_know_split:]
 
-    idx_att_split = ATTITUDE_COLS.index("_88_HRT_will_signifi_y_physical_condition")
+    idx_att_split = ATTITUDE_COLS.index("_87_I_have_a_full_un_imenopausal_syndrome")
     ATT_MENO_COLS = ATTITUDE_COLS[:idx_att_split]
     ATT_HRT_COLS = ATTITUDE_COLS[idx_att_split:]
 
     def score_knowledge_block(cols):
         scores = []
         for col in cols:
+            if col in ["_26_The_main_symptoms_of_menopause", "_65_HRT_may_potentia_side_effects_such_as"]:
+                if col in df.columns:
+
+                    def score_multi(x):
+                        if pd.isna(x):
+                            return np.nan
+                        return len(str(x).split())
+
+                    scored = df[col].apply(score_multi)
+                else:
+                    q26_cols = [c for c in df.columns if str(c).startswith(col + "/")]
+                    if q26_cols:
+                        scored = df[q26_cols].sum(axis=1)
+                        all_na = df[q26_cols].isna().all(axis=1)
+                        scored.loc[all_na] = np.nan
+                    else:
+                        scored = pd.Series(np.nan, index=df.index)
+                scores.append(pd.Series(scored, name=col))
+                continue
+
             if col not in df.columns:
                 continue
             ans = CORRECT_ANSWER_KEY.get(col)
@@ -479,27 +502,75 @@ def compute_split_scores(df: pd.DataFrame) -> pd.DataFrame:
     df_att_meno = score_attitude_block(ATT_MENO_COLS)
     df_att_hrt = score_attitude_block(ATT_HRT_COLS)
 
+    # Missing respondents fix for Knowledge of HRT (User requested imputation of minimum score)
+    # If a respondent has completely blank responses (NaN in all columns), impute 0 across all variables.
+    all_na_know_hrt = df_know_hrt.isna().all(axis=1)
+    if all_na_know_hrt.any():
+        df_know_hrt.loc[all_na_know_hrt, :] = 0.0
+
+    # Missing respondents fix for Attitude towards HRT (User requested imputation of minimum score)
+    # If a respondent has completely blank responses (NaN in all columns), impute 1 across all 12 variables.
+    all_na_att_hrt = df_att_hrt.isna().all(axis=1)
+    if all_na_att_hrt.any():
+        df_att_hrt.loc[all_na_att_hrt, :] = 1.0
+
+    # Ensure respondents who skipped HRT knowledge due to selecting No (0) for "Do you know about hormone replacement therapy?"
+    # receive a legitimate 0 score instead of NaN, anchoring the pool to the full dataset (n=239)
+    filter_col = next(
+        (c for c in df.columns if "Do_you_know_about_hormone_repl" in str(c)), None
+    )
+    if filter_col:
+        # Check against string '0', float 0.0, int 0, 'No', etc.
+        no_mask = df[filter_col].apply(
+            lambda x: str(x).strip().lower() in ["0", "0.0", "no", "false"]
+        )
+
+        # Force physical 0.0 so they contribute precisely 0 marks to their total denominator
+        df_know_hrt.loc[no_mask, :] = 0.0
+
     # Print Cronbach's Alpha (Requirement 3)
+    c_m = calculate_cronbach_alpha(df_know_meno)
+    c_h = calculate_cronbach_alpha(df_know_hrt)
+    a_m = calculate_cronbach_alpha(df_att_meno)
+    a_h = calculate_cronbach_alpha(df_att_hrt)
+
     print("=" * 70)
     print("RELIABILITY CHECKS (Cronbach's Alpha)")
     print("=" * 70)
-    print(f"Knowledge of Menopause: {calculate_cronbach_alpha(df_know_meno):.3f}")
-    print(f"Knowledge of HRT:       {calculate_cronbach_alpha(df_know_hrt):.3f}")
-    print(f"Attitude regarding Menopause: {calculate_cronbach_alpha(df_att_meno):.3f}")
-    print(f"Attitude regarding HRT:       {calculate_cronbach_alpha(df_att_hrt):.3f}")
+    print(f"Knowledge of Menopause: {c_m:.3f}")
+    print(f"Knowledge of HRT:       {c_h:.3f}")
+    print(f"Attitude regarding Menopause: {a_m:.3f}")
+    print(f"Attitude regarding HRT:       {a_h:.3f}")
 
-    # Compute Sums
-    df["know_meno_score"] = df_know_meno.sum(axis=1)
-    df["know_hrt_score"] = df_know_hrt.sum(axis=1)
-    df["att_meno_score"] = df_att_meno.sum(axis=1)
-    df["att_hrt_score"] = df_att_hrt.sum(axis=1)
+    df.attrs["cronbach"] = {
+        "Knowledge of Menopause": c_m,
+        "Knowledge of HRT": c_h,
+        "Attitude towards Menopause": a_m,
+        "Attitude towards HRT": a_h,
+    }
+
+    # Compute Sums (using min_count=1 to preserve NaN for completely skipped sections)
+    df["know_meno_score"] = df_know_meno.sum(axis=1, min_count=1)
+    df["know_hrt_score"] = df_know_hrt.sum(axis=1, min_count=1)
+    df["att_meno_score"] = df_att_meno.sum(axis=1, min_count=1)
+    df["att_hrt_score"] = df_att_hrt.sum(axis=1, min_count=1)
 
     # Note: Retain overall knowledge/attitude fields to avoid breaking dashboard compatibility,
     # but base them on sum of sub-scales.
     df["knowledge_score"] = df["know_meno_score"] + df["know_hrt_score"]
-    df["knowledge_max"] = df_know_meno.notna().sum(axis=1) + df_know_hrt.notna().sum(
-        axis=1
-    )
+
+    def get_max_score(df_scored):
+        max_scores = pd.Series(0.0, index=df_scored.index)
+        for col in df_scored.columns:
+            if col == "_26_The_main_symptoms_of_menopause":
+                max_scores += df_scored[col].notna() * 12
+            elif col == "_65_HRT_may_potentia_side_effects_such_as":
+                max_scores += df_scored[col].notna() * 3
+            else:
+                max_scores += df_scored[col].notna() * 1
+        return max_scores
+
+    df["knowledge_max"] = get_max_score(df_know_meno) + get_max_score(df_know_hrt)
     df["knowledge_pct"] = (df["knowledge_score"] / df["knowledge_max"] * 100).round(1)
 
     df["attitude_score"] = df["att_meno_score"] + df["att_hrt_score"]
@@ -608,7 +679,10 @@ def categorize_variables(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def run_chi_square(df: pd.DataFrame) -> list[dict]:
-    """Run detailed chi-square tests (Requirement 4)."""
+    """Run detailed chi-square tests with Fisher Exact fallback (Requirement 4)."""
+    import numpy as np
+    from scipy.stats import fisher_exact, MonteCarloMethod
+
     demo_vars = {
         "Age Group": "age_label",
         "Education Level": "education_label",
@@ -616,7 +690,6 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
         "Marital Status": "marital_label",
         "Monthly Income": "income_label",
     }
-    # 5 specific dependent variables
     outcomes = {
         "Knowledge of Menopause Level": "know_meno_category",
         "Knowledge of HRT Level": "know_hrt_category",
@@ -626,6 +699,9 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
     }
 
     results = []
+    # Seed rng for reproducible Monte Carlo permutations
+    rng = np.random.default_rng(42)
+
     for demo_name, demo_col in demo_vars.items():
         if demo_col not in df.columns:
             continue
@@ -637,10 +713,7 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
             if len(subset) == 0:
                 continue
 
-            # Crosstab for actual testing
             contingency = pd.crosstab(subset[demo_col], subset[outcome_col])
-
-            # Crosstab with margins=True for detailed output
             detailed_ct = pd.crosstab(
                 subset[demo_col],
                 subset[outcome_col],
@@ -657,6 +730,7 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
                         "chi2": None,
                         "df": None,
                         "p_value": None,
+                        "fisher_p_value": None,
                         "significant": False,
                         "note": "Insufficient categories",
                         "crosstab": ct_dict,
@@ -667,8 +741,29 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
             try:
                 chi2, p, dof, expected = stats.chi2_contingency(contingency)
                 note = ""
-                if expected.min() < 5:
-                    note = f"Min expected = {expected.min():.1f} (<5)"
+                fisher_p = None
+
+                # Check expected frequencies logic
+                val_min = expected.min()
+                pct_lt_5 = (expected < 5).sum() / expected.size
+
+                if val_min < 1 or pct_lt_5 > 0.2:
+                    note = f"Min exp={val_min:.1f}, {(pct_lt_5 * 100):.0f}%<5. Reverted to Exact Test."
+
+                    try:
+                        if contingency.shape == (2, 2):
+                            res = fisher_exact(contingency)
+                            fisher_p = res.pvalue
+                        else:
+                            method = MonteCarloMethod(n_resamples=9999, rng=rng)
+                            res = fisher_exact(contingency, method=method)
+                            fisher_p = res.pvalue
+                    except Exception as fe:
+                        note += f" (Fisher failed: {str(fe)})"
+
+                # Determine significance based on Fisher if present, otherwise Chi2
+                final_p = fisher_p if fisher_p is not None else p
+                is_sig = bool(final_p < 0.05) if final_p is not None else False
 
                 results.append(
                     {
@@ -677,7 +772,10 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
                         "chi2": round(chi2, 3),
                         "df": int(dof),
                         "p_value": round(p, 4),
-                        "significant": bool(p < 0.05),
+                        "fisher_p_value": round(fisher_p, 4)
+                        if fisher_p is not None
+                        else None,
+                        "significant": is_sig,
                         "note": note,
                         "crosstab": ct_dict,
                     }
@@ -690,6 +788,7 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
                         "chi2": None,
                         "df": None,
                         "p_value": None,
+                        "fisher_p_value": None,
                         "significant": False,
                         "note": f"Error: {str(e)}",
                         "crosstab": {"error": str(e)},
@@ -725,36 +824,53 @@ def build_summary(
             if is_knowledge:
                 return {"good_n": 0, "good_pct": 0, "poor_n": 0, "poor_pct": 0}
             else:
-                return {"positive_n": 0, "positive_pct": 0, "negative_n": 0, "negative_pct": 0}
-        
+                return {
+                    "positive_n": 0,
+                    "positive_pct": 0,
+                    "negative_n": 0,
+                    "negative_pct": 0,
+                }
+
         cats = ["Good", "Poor"] if is_knowledge else ["Positive", "Negative"]
         n1 = int((subset[cat_col] == cats[0]).sum())
         n2 = int((subset[cat_col] == cats[1]).sum())
-        
+
         if is_knowledge:
             return {
                 "good_n": n1,
                 "good_pct": round(float(n1 / len(subset) * 100), 1),
                 "poor_n": n2,
-                "poor_pct": round(float(n2 / len(subset) * 100), 1)
+                "poor_pct": round(float(n2 / len(subset) * 100), 1),
             }
         else:
             return {
                 "positive_n": n1,
                 "positive_pct": round(float(n1 / len(subset) * 100), 1),
                 "negative_n": n2,
-                "negative_pct": round(float(n2 / len(subset) * 100), 1)
+                "negative_pct": round(float(n2 / len(subset) * 100), 1),
             }
 
     constructs = {
-        "knowledge_menopause": get_construct_stats(df, "know_meno_score", "know_meno_category", True),
-        "knowledge_hrt": get_construct_stats(df, "know_hrt_score", "know_hrt_category", True),
-        "attitude_menopause": get_construct_stats(df, "att_meno_score", "att_meno_category", False),
-        "attitude_hrt": get_construct_stats(df, "att_hrt_score", "att_hrt_category", False),
+        "knowledge_menopause": get_construct_stats(
+            df, "know_meno_score", "know_meno_category", True
+        ),
+        "knowledge_hrt": get_construct_stats(
+            df, "know_hrt_score", "know_hrt_category", True
+        ),
+        "attitude_menopause": get_construct_stats(
+            df, "att_meno_score", "att_meno_category", False
+        ),
+        "attitude_hrt": get_construct_stats(
+            df, "att_hrt_score", "att_hrt_category", False
+        ),
     }
 
     # HRT practice
-    hrt_counts = df["hrt_practice"].value_counts() if "hrt_practice" in df.columns else pd.Series()
+    hrt_counts = (
+        df["hrt_practice"].value_counts()
+        if "hrt_practice" in df.columns
+        else pd.Series()
+    )
     hrt_practice = {
         "currently_using": int(hrt_counts.get("Currently using HRT", 0)),
         "previously_used": int(hrt_counts.get("Previously used HRT", 0)),
@@ -885,40 +1001,62 @@ def descriptive_stats(df):
     tables["Table 1 - Sociodemographics"] = table1
 
     # Generic function to build construct tables
-    def build_construct_table(score_col, cat_col, total_items, is_knowledge=True, title=""):
+    def build_construct_table(
+        score_col, cat_col, total_items, is_knowledge=True, title=""
+    ):
         data = df[df[score_col].notna()]
         if len(data) == 0:
             return pd.DataFrame()
-            
+
         mean_score = data[score_col].mean()
         std_score = data[score_col].std()
-        
+
         c_rows = []
         c_rows.append({"Measure": "Total respondents scored", "Value": f"{len(data)}"})
-        c_rows.append({"Measure": "Mean score ± SD", "Value": f"{mean_score:.1f} ± {std_score:.1f}"})
+        c_rows.append(
+            {
+                "Measure": "Mean score ± SD",
+                "Value": f"{mean_score:.1f} ± {std_score:.1f}",
+            }
+        )
         c_rows.append({"Measure": "Items evaluated", "Value": f"{total_items}"})
-        
+
         if not is_knowledge:
-            c_rows.append({"Measure": "Score range", "Value": f"{data[score_col].min():.0f} - {data[score_col].max():.0f}"})
-        
-        c_rows.append({"Measure": "Categorization cutoff (mean)", "Value": f"{mean_score:.1f}"})
+            c_rows.append(
+                {
+                    "Measure": "Score range",
+                    "Value": f"{data[score_col].min():.0f} - {data[score_col].max():.0f}",
+                }
+            )
+
+        c_rows.append(
+            {"Measure": "Categorization cutoff (mean)", "Value": f"{mean_score:.1f}"}
+        )
         c_rows.append({"Measure": "---", "Value": "---"})
-        
+
         cats = ["Good", "Poor"] if is_knowledge else ["Positive", "Negative"]
         for cat in cats:
             n = (data[cat_col] == cat).sum()
             pct = n / len(data) * 100 if len(data) > 0 else 0
             c_rows.append({"Measure": f"{cat} (n, %)", "Value": f"{n} ({pct:.1f}%)"})
-            
+
         return pd.DataFrame(c_rows)
 
-    idx_know = KNOWLEDGE_COLS.index("_59_HRT_can_be_taken_r_used_in_the_vagina")
-    idx_att = ATTITUDE_COLS.index("_88_HRT_will_signifi_y_physical_condition")
+    idx_know = KNOWLEDGE_COLS.index("_59_HRT_can_be_taken_r_used_in_the_vagina")  # noqa: F841
+    idx_att = ATTITUDE_COLS.index("_87_I_have_a_full_un_imenopausal_syndrome")
 
-    tables["Table 2 - Know_Menopause"] = build_construct_table("know_meno_score", "know_meno_category", len(KNOWLEDGE_COLS[:idx_know]), True)
-    tables["Table 3 - Know_HRT"] = build_construct_table("know_hrt_score", "know_hrt_category", len(KNOWLEDGE_COLS[idx_know:]), True)
-    tables["Table 4 - Att_Menopause"] = build_construct_table("att_meno_score", "att_meno_category", len(ATTITUDE_COLS[:idx_att]), False)
-    tables["Table 5 - Att_HRT"] = build_construct_table("att_hrt_score", "att_hrt_category", len(ATTITUDE_COLS[idx_att:]), False)
+    tables["Table 2 - Know_Menopause"] = build_construct_table(
+        "know_meno_score", "know_meno_category", 45, True
+    )
+    tables["Table 3 - Know_HRT"] = build_construct_table(
+        "know_hrt_score", "know_hrt_category", 16, True
+    )
+    tables["Table 4 - Att_Menopause"] = build_construct_table(
+        "att_meno_score", "att_meno_category", len(ATTITUDE_COLS[:idx_att]), False
+    )
+    tables["Table 5 - Att_HRT"] = build_construct_table(
+        "att_hrt_score", "att_hrt_category", len(ATTITUDE_COLS[idx_att:]), False
+    )
 
     # ── Table 6: HRT Practice Patterns ───────────────────────────────────
     practice_rows = []
@@ -932,7 +1070,14 @@ def descriptive_stats(df):
         ("Would like to know more about menopause/HRT", "want_to_know"),
     ]
 
-    practice_rows.append({"Variable": "HRT Awareness & Usage", "Category": "", "Frequency (n)": "", "Percentage (%)": ""})
+    practice_rows.append(
+        {
+            "Variable": "HRT Awareness & Usage",
+            "Category": "",
+            "Frequency (n)": "",
+            "Percentage (%)": "",
+        }
+    )
 
     for label, key in practice_items:
         col = PRACTICE_COLS.get(key, "")
@@ -941,9 +1086,23 @@ def descriptive_stats(df):
             total = len(series)
             yes_n = (series == 1).sum()
             yes_pct = yes_n / total * 100 if total > 0 else 0
-            practice_rows.append({"Variable": "", "Category": label, "Frequency (n)": f"{yes_n}/{total}", "Percentage (%)": f"{yes_pct:.1f}"})
+            practice_rows.append(
+                {
+                    "Variable": "",
+                    "Category": label,
+                    "Frequency (n)": f"{yes_n}/{total}",
+                    "Percentage (%)": f"{yes_pct:.1f}",
+                }
+            )
 
-    practice_rows.append({"Variable": "Genitourinary Symptoms (Yes)", "Category": "", "Frequency (n)": "", "Percentage (%)": ""})
+    practice_rows.append(
+        {
+            "Variable": "Genitourinary Symptoms (Yes)",
+            "Category": "",
+            "Frequency (n)": "",
+            "Percentage (%)": "",
+        }
+    )
 
     for symptom_label, symptom_col in SYMPTOM_COLS.items():
         if symptom_col in df.columns:
@@ -951,9 +1110,38 @@ def descriptive_stats(df):
             total = len(series)
             yes_n = (series == 1).sum()
             yes_pct = yes_n / total * 100 if total > 0 else 0
-            practice_rows.append({"Variable": "", "Category": symptom_label, "Frequency (n)": f"{yes_n}/{total}", "Percentage (%)": f"{yes_pct:.1f}"})
+            practice_rows.append(
+                {
+                    "Variable": "",
+                    "Category": symptom_label,
+                    "Frequency (n)": f"{yes_n}/{total}",
+                    "Percentage (%)": f"{yes_pct:.1f}",
+                }
+            )
+            
+    # Add any genitourinary symptom
+    valid_symptom_cols = [c for c in SYMPTOM_COLS.values() if c in df.columns]
+    if valid_symptom_cols:
+        any_symp_n = (df[valid_symptom_cols] == 1).any(axis=1).sum()
+        total_cons = len(df)
+        any_symp_pct = any_symp_n / total_cons * 100 if total_cons > 0 else 0
+        practice_rows.append(
+            {
+                "Variable": "",
+                "Category": "Any genitourinary symptom reported",
+                "Frequency (n)": f"{any_symp_n}/{total_cons}",
+                "Percentage (%)": f"{any_symp_pct:.1f}",
+            }
+        )
 
-    practice_rows.append({"Variable": "Symptom Management Methods", "Category": "", "Frequency (n)": "", "Percentage (%)": ""})
+    practice_rows.append(
+        {
+            "Variable": "Symptom Management Methods",
+            "Category": "",
+            "Frequency (n)": "",
+            "Percentage (%)": "",
+        }
+    )
 
     for mgmt_label, mgmt_col in MANAGEMENT_COLS.items():
         if mgmt_col in df.columns:
@@ -961,7 +1149,14 @@ def descriptive_stats(df):
             total = len(series)
             yes_n = (series == 1).sum()
             yes_pct = yes_n / total * 100 if total > 0 else 0
-            practice_rows.append({"Variable": "", "Category": mgmt_label, "Frequency (n)": f"{yes_n}/{total}", "Percentage (%)": f"{yes_pct:.1f}"})
+            practice_rows.append(
+                {
+                    "Variable": "",
+                    "Category": mgmt_label,
+                    "Frequency (n)": f"{yes_n}/{total}",
+                    "Percentage (%)": f"{yes_pct:.1f}",
+                }
+            )
 
     tables["Table 6 - HRT Practices"] = pd.DataFrame(practice_rows)
 
@@ -972,10 +1167,8 @@ def build_excel_files(
     df: pd.DataFrame, chi_results: list[dict]
 ) -> tuple[io.BytesIO, io.BytesIO]:
     """Write results and cleaned data to in-memory Excel buffers."""
-    # --- results_output.xlsx ---
     results_buf = io.BytesIO()
-    
-    # Rebuild Chi-Square Table (Requirement 4 detailed breakdown)
+
     chi_rows = []
     for test in chi_results:
         demo_name = test.get("demographic", "")
@@ -983,47 +1176,45 @@ def build_excel_files(
         chi2 = test.get("chi2", "")
         dof = test.get("df", "")
         p_val = test.get("p_value", "")
+        fisher_p = test.get("fisher_p_value", "")
         sig = "Yes" if test.get("significant") else "No"
         note = test.get("note", "")
         ct = test.get("crosstab", {})
 
         if not ct or "error" in ct:
-            chi_rows.append({
-                "Demographic Variable": demo_name,
-                "Category": "Error / Insufficient data",
-                "Outcome Variable": outcome_name,
-                "Result 1": "",
-                "Result 2": "",
-                "Chi-Square (χ²)": chi2,
-                "df": dof,
-                "p-value": p_val,
-                "Significance": sig,
-                "Note": note
-            })
+            chi_rows.append(
+                {
+                    "Demographic Variable": demo_name,
+                    "Category": "Error / Insufficient data",
+                    "Outcome Variable": outcome_name,
+                    "Result 1": "",
+                    "Result 2": "",
+                    "Chi-Square (χ²)": chi2,
+                    "df": dof,
+                    "Chi2 p-value": p_val,
+                    "Fisher's Exact p-value": fisher_p,
+                    "Significance": sig,
+                    "Note": note,
+                }
+            )
             continue
 
-        # Extract outcome categories (e.g. ['Good', 'Poor'] or ['Positive', 'Negative'])
-        # excluding 'Total'
         outcome_cats = [k for k in ct.keys() if k != "Total"]
-        
-        # Determine the independent variable categories (e.g. '40-44', '45-49')
-        # by looking at the keys of the first outcome category, excluding 'Total'
         if not outcome_cats:
             continue
-            
+
         demo_cats = [k for k in ct[outcome_cats[0]].keys() if k != "Total"]
-        # Add 'Total' to the end for the grand total row
         demo_cats.append("Total")
 
         for i, d_cat in enumerate(demo_cats):
             row = {}
-            # Only print the overall test stats on the first row of this block
             if i == 0:
                 row["Demographic Variable"] = demo_name
                 row["Outcome Variable"] = outcome_name
                 row["Chi-Square (χ²)"] = chi2
                 row["df"] = dof
-                row["p-value"] = p_val
+                row["Chi2 p-value"] = p_val
+                row["Fisher's Exact p-value"] = fisher_p if fisher_p is not None else ""
                 row["Significance"] = sig
                 row["Note"] = note
             else:
@@ -1031,44 +1222,46 @@ def build_excel_files(
                 row["Outcome Variable"] = ""
                 row["Chi-Square (χ²)"] = ""
                 row["df"] = ""
-                row["p-value"] = ""
+                row["Chi2 p-value"] = ""
+                row["Fisher's Exact p-value"] = ""
                 row["Significance"] = ""
                 row["Note"] = ""
-                
+
             row["Category"] = d_cat
-            
-            # calculate N and % for each outcome
+
             for j, o_cat in enumerate(outcome_cats):
                 col_name = f"{o_cat} n(%)"
                 val = ct[o_cat].get(d_cat, 0)
                 tot = ct["Total"].get(d_cat, 0)
                 pct = (val / tot * 100) if tot > 0 else 0
                 row[col_name] = f"{val} ({pct:.1f}%)"
-                
+
             chi_rows.append(row)
 
     chi_df = pd.DataFrame(chi_rows)
 
-    # Reorder columns to make 'Category' and 'Results' appear before the Chi-stats
     if not chi_df.empty:
         base_cols = ["Demographic Variable", "Category", "Outcome Variable"]
-        stats_cols = ["Chi-Square (χ²)", "df", "p-value", "Significance", "Note"]
+        stats_cols = [
+            "Chi-Square (χ²)",
+            "df",
+            "Chi2 p-value",
+            "Fisher's Exact p-value",
+            "Significance",
+            "Note",
+        ]
         dynamic_cols = [c for c in chi_df.columns if c not in base_cols + stats_cols]
         chi_df = chi_df[base_cols + dynamic_cols + stats_cols]
 
-    # Generate the formatted tables for the Excel export
     tables = descriptive_stats(df)
 
     with pd.ExcelWriter(results_buf, engine="openpyxl") as writer:
-        # Tables 1-6 from descriptive stats
         for sheet_name, table_df in tables.items():
             safe_name = sheet_name[:31]
             table_df.to_excel(writer, sheet_name=safe_name, index=False)
 
-        # Table 7 - Chi-Square sheet
         chi_df.to_excel(writer, sheet_name="Table 7 - Chi-Square", index=False)
 
-        # Scores & Labels sheet
         score_cols = [
             "know_meno_score",
             "know_hrt_score",
@@ -1082,9 +1275,32 @@ def build_excel_files(
         export_cols = label_cols + [c for c in score_cols if c in df.columns]
         df[export_cols].to_excel(writer, sheet_name="Scores & Labels", index=False)
 
+        if "cronbach" in df.attrs:
+            cron_data = []
+            for construct_name, alpha_val in df.attrs["cronbach"].items():
+                cron_data.append(
+                    {
+                        "Psychometric Construct": construct_name,
+                        "Cronbach's Alpha (α)": round(alpha_val, 3),
+                        "Internal Consistency": "Excellent"
+                        if alpha_val >= 0.9
+                        else "Good"
+                        if alpha_val >= 0.8
+                        else "Acceptable"
+                        if alpha_val >= 0.7
+                        else "Questionable"
+                        if alpha_val >= 0.6
+                        else "Poor"
+                        if alpha_val >= 0.5
+                        else "Unacceptable",
+                    }
+                )
+            pd.DataFrame(cron_data).to_excel(
+                writer, sheet_name="Table 8 - Reliability (Alpha)", index=False
+            )
+
     results_buf.seek(0)
 
-    # --- raw_data_cleaned.xlsx ---
     cleaned_buf = io.BytesIO()
     df.to_excel(cleaned_buf, index=False, engine="openpyxl")
     cleaned_buf.seek(0)
