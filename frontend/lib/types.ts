@@ -45,6 +45,7 @@ export interface ChiSquareResult {
   chi2: number | null;
   df: number | null;
   p_value: number | null;
+  fisher_p_value?: number | null;
   significant: boolean;
   note: string;
   crosstab?: Record<string, Record<string, number>>;

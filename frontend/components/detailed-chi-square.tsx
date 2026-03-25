@@ -54,8 +54,15 @@ export function DetailedChiSquareTable({
         </TableHeader>
         <TableBody>
           {results.map((result, idx) => {
-            const { demographic, outcome, chi2, df, p_value, crosstab } =
-              result;
+            const {
+              demographic,
+              outcome,
+              chi2,
+              df,
+              p_value,
+              fisher_p_value,
+              crosstab,
+            } = result;
 
             const hasError = crosstab && "error" in crosstab;
 
@@ -92,8 +99,15 @@ export function DetailedChiSquareTable({
               crosstab[outcomeLabels[0]] || {},
             ).filter((k) => k !== "Total");
 
+            // Evaluate significance via fisher if exists, otherwise chi2
+            const active_p_value =
+              fisher_p_value !== undefined && fisher_p_value !== null
+                ? fisher_p_value
+                : p_value;
+
             const isSignificant =
-              result.significant || (p_value !== null && p_value < 0.05);
+              result.significant ||
+              (active_p_value !== null && active_p_value < 0.05);
 
             return (
               <Fragment key={`parent-${idx}`}>
@@ -128,7 +142,13 @@ export function DetailedChiSquareTable({
                     }`}
                   >
                     {p_value !== null ? p_value.toFixed(4) : "-"}
-                    {isSignificant && "*"}
+                    {isSignificant && fisher_p_value == null && "*"}
+                    {fisher_p_value != null && (
+                      <div className="text-[10px] whitespace-nowrap opacity-80 mt-1 font-semibold text-amber-600 dark:text-amber-400">
+                        {isSignificant && "*"} Exact:{" "}
+                        {fisher_p_value.toFixed(4)}
+                      </div>
+                    )}
                   </TableCell>
                 </TableRow>
 
