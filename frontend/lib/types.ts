@@ -26,6 +26,7 @@ export interface AnalysisSummary {
   };
 
   chi_square: ChiSquareResult[];
+  logistic_regression?: LogisticRegressionResult[];
 }
 
 export interface ConstructScoreData {
@@ -49,4 +50,23 @@ export interface ChiSquareResult {
   significant: boolean;
   note: string;
   crosstab?: Record<string, Record<string, number>>;
+}
+
+export interface LogisticPredictor {
+  variable: string;
+  category: string;
+  coef: number;
+  odds_ratio: number;
+  ci_lower: number;
+  ci_upper: number;
+  p_value: number;
+  significant: boolean;
+}
+
+export interface LogisticRegressionResult {
+  outcome: string;
+  predictors: LogisticPredictor[];
+  n?: number;
+  pseudo_r2?: number;
+  note?: string;
 }

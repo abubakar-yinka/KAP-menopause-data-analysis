@@ -8,6 +8,7 @@ import {
   AlertCircle,
   FileSpreadsheet,
 } from "lucide-react";
+import { LogisticRegressionTable } from "@/components/logistic-regression-table";
 import {
   Card,
   CardContent,
@@ -319,6 +320,12 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
           >
             Statistical Tests
           </TabsTrigger>
+          <TabsTrigger
+            value="logistic"
+            className="cursor-pointer whitespace-normal h-auto! py-2 lg:py-1"
+          >
+            Logistic Regression
+          </TabsTrigger>
         </TabsList>
 
         {/* TAB 1: Knowledge */}
@@ -602,6 +609,27 @@ export function Dashboard({ data, onUpload, isLoading }: DashboardProps) {
             </CardHeader>
             <CardContent>
               <DetailedChiSquareTable results={summary.chi_square} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* TAB 5: Logistic Regression */}
+        <TabsContent value="logistic" className="space-y-4">
+          <Card className="border-muted">
+            <CardHeader>
+              <CardTitle>Binary Logistic Regression</CardTitle>
+              <CardDescription>
+                Identifies specific sociodemographic sub-categories that are
+                statistically significant predictors of knowledge and attitude
+                outcomes. Odds Ratios (OR) &gt; 1 indicate higher likelihood; OR
+                &lt; 1 indicate lower likelihood relative to the reference
+                category.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <LogisticRegressionTable
+                results={summary.logistic_regression ?? []}
+              />
             </CardContent>
           </Card>
         </TabsContent>
