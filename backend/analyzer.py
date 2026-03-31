@@ -13,6 +13,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from scipy import stats
+import statsmodels.api as sm
 
 warnings.filterwarnings("ignore")
 
@@ -436,7 +437,10 @@ def compute_split_scores(df: pd.DataFrame) -> pd.DataFrame:
     def score_knowledge_block(cols):
         scores = []
         for col in cols:
-            if col in ["_26_The_main_symptoms_of_menopause", "_65_HRT_may_potentia_side_effects_such_as"]:
+            if col in [
+                "_26_The_main_symptoms_of_menopause",
+                "_65_HRT_may_potentia_side_effects_such_as",
+            ]:
                 if col in df.columns:
 
                     def score_multi(x):
@@ -798,8 +802,153 @@ def run_chi_square(df: pd.DataFrame) -> list[dict]:
     return results
 
 
+def run_logistic_regression(df: pd.DataFrame) -> list[dict]:
+    """Run binary logistic regression for each outcome against all sociodemographic predictors.
+
+    Matches the same demographic×outcome pairs used in the Chi-Square section.
+    Uses statsmodels Logit with dummy-encoded (drop-first) categorical predictors.
+    Returns a list of dicts with coefficients, odds ratios, 95% CIs, and p-values.
+    """
+    demo_vars = {
+        "Age Group": "age_label",
+        "Education Level": "education_label",
+        "Occupation": "occupation_label",
+        "Marital Status": "marital_label",
+        "Monthly Income": "income_label",
+    }
+    outcomes = {
+        "Knowledge of Menopause Level": "know_meno_category",
+        "Knowledge of HRT Level": "know_hrt_category",
+        "Attitude towards Menopause Level": "att_meno_category",
+        "Attitude towards HRT Level": "att_hrt_category",
+        "Current HRT Use": "hrt_current",
+    }
+    # Map categorical labels to binary 0/1
+    positive_labels = {"Good", "Positive", "Yes"}
+
+    results = []
+
+    for outcome_name, outcome_col in outcomes.items():
+        if outcome_col not in df.columns:
+            continue
+
+        # Encode the dependent variable as binary 0/1
+        y_series = df[outcome_col].map(
+            lambda x: 1 if x in positive_labels else (0 if pd.notna(x) else np.nan)
+        )
+
+        # Build the combined predictor matrix
+        predictor_frames = []
+        for demo_name, demo_col in demo_vars.items():
+            if demo_col not in df.columns:
+                continue
+            predictor_frames.append(df[[demo_col]].copy())
+
+        if not predictor_frames:
+            continue
+
+        X_raw = pd.concat(predictor_frames, axis=1)
+
+        # Combine X and y, drop rows where either is NaN
+        combined = pd.concat([X_raw, y_series.rename("_y_")], axis=1).dropna()
+        if len(combined) < 20:
+            results.append(
+                {
+                    "outcome": outcome_name,
+                    "predictors": [],
+                    "note": f"Insufficient data (n={len(combined)})",
+                }
+            )
+            continue
+
+        y = combined["_y_"].astype(int)
+        X_cats = combined.drop(columns=["_y_"])
+
+        # One-hot encode with drop_first for reference categories
+        X_dummies = pd.get_dummies(X_cats, drop_first=True, dtype=float)
+
+        # Drop zero-variance columns (causes singular matrix)
+        X_dummies = X_dummies.loc[:, X_dummies.nunique() > 1]
+
+        # Add constant (intercept)
+        X_dummies = sm.add_constant(X_dummies, has_constant="add")
+
+        try:
+            model = sm.Logit(y, X_dummies)
+            result = model.fit(disp=0, maxiter=300, method="bfgs")
+
+            conf = result.conf_int()
+            predictors = []
+            for var_name in X_dummies.columns:
+                if var_name == "const":
+                    continue
+
+                # Parse variable name: "education_label_Tertiary" -> ("Education Level", "Tertiary")
+                demo_col_name = None
+                category = var_name
+                for d_name, d_col in demo_vars.items():
+                    if var_name.startswith(d_col + "_"):
+                        demo_col_name = d_name
+                        category = var_name[len(d_col) + 1 :]
+                        break
+
+                coef = result.params[var_name]
+                p_val = result.pvalues[var_name]
+                ci_lower = conf.loc[var_name, 0]
+                ci_upper = conf.loc[var_name, 1]
+                odds_ratio = np.exp(coef)
+                or_ci_lower = np.exp(ci_lower)
+                or_ci_upper = np.exp(ci_upper)
+
+                def safe_float(v, decimals=4):
+                    """Sanitize float for JSON: replace inf/NaN with None."""
+                    f = float(v)
+                    if not np.isfinite(f):
+                        return None
+                    return round(f, decimals)
+
+                predictors.append(
+                    {
+                        "variable": demo_col_name or var_name,
+                        "category": category,
+                        "coef": safe_float(coef),
+                        "odds_ratio": safe_float(odds_ratio),
+                        "ci_lower": safe_float(or_ci_lower),
+                        "ci_upper": safe_float(or_ci_upper),
+                        "p_value": safe_float(p_val),
+                        "significant": bool(p_val < 0.05)
+                        if np.isfinite(float(p_val))
+                        else False,
+                    }
+                )
+
+            results.append(
+                {
+                    "outcome": outcome_name,
+                    "predictors": predictors,
+                    "n": int(len(y)),
+                    "pseudo_r2": safe_float(result.prsquared),
+                    "note": "",
+                }
+            )
+        except Exception as e:
+            results.append(
+                {
+                    "outcome": outcome_name,
+                    "predictors": [],
+                    "note": f"Model failed: {str(e)}",
+                }
+            )
+
+    return results
+
+
 def build_summary(
-    df: pd.DataFrame, n_total: int, n_excluded: int, chi_results: list[dict]
+    df: pd.DataFrame,
+    n_total: int,
+    n_excluded: int,
+    chi_results: list[dict],
+    logistic_results: list[dict] | None = None,
 ) -> dict:
     """Build JSON-serializable summary dict for the frontend."""
     n = len(df)
@@ -885,6 +1034,7 @@ def build_summary(
         "constructs": constructs,
         "hrt_practices": hrt_practice,
         "chi_square": chi_results,
+        "logistic_regression": logistic_results or [],
     }
 
 
@@ -1118,7 +1268,7 @@ def descriptive_stats(df):
                     "Percentage (%)": f"{yes_pct:.1f}",
                 }
             )
-            
+
     # Add any genitourinary symptom
     valid_symptom_cols = [c for c in SYMPTOM_COLS.values() if c in df.columns]
     if valid_symptom_cols:
@@ -1164,7 +1314,9 @@ def descriptive_stats(df):
 
 
 def build_excel_files(
-    df: pd.DataFrame, chi_results: list[dict]
+    df: pd.DataFrame,
+    chi_results: list[dict],
+    logistic_results: list[dict] | None = None,
 ) -> tuple[io.BytesIO, io.BytesIO]:
     """Write results and cleaned data to in-memory Excel buffers."""
     results_buf = io.BytesIO()
@@ -1299,6 +1451,54 @@ def build_excel_files(
                 writer, sheet_name="Table 8 - Reliability (Alpha)", index=False
             )
 
+        if logistic_results:
+            lr_rows = []
+            for model in logistic_results:
+                outcome = model.get("outcome", "")
+                n_obs = model.get("n", "")
+                pseudo_r2 = model.get("pseudo_r2", "")
+                note = model.get("note", "")
+                predictors = model.get("predictors", [])
+
+                if not predictors:
+                    lr_rows.append(
+                        {
+                            "Outcome Variable": outcome,
+                            "Demographic Factor": note or "No predictors",
+                            "Category (vs Reference)": "",
+                            "Coefficient (β)": "",
+                            "Odds Ratio (OR)": "",
+                            "95% CI Lower": "",
+                            "95% CI Upper": "",
+                            "p-value": "",
+                            "Significance": "",
+                            "n": n_obs,
+                            "Pseudo R²": pseudo_r2,
+                        }
+                    )
+                    continue
+
+                for i, pred in enumerate(predictors):
+                    row = {
+                        "Outcome Variable": outcome if i == 0 else "",
+                        "Demographic Factor": pred.get("variable", ""),
+                        "Category (vs Reference)": pred.get("category", ""),
+                        "Coefficient (β)": pred.get("coef", ""),
+                        "Odds Ratio (OR)": pred.get("odds_ratio", ""),
+                        "95% CI Lower": pred.get("ci_lower", ""),
+                        "95% CI Upper": pred.get("ci_upper", ""),
+                        "p-value": pred.get("p_value", ""),
+                        "Significance": "Yes" if pred.get("significant") else "No",
+                        "n": n_obs if i == 0 else "",
+                        "Pseudo R²": pseudo_r2 if i == 0 else "",
+                    }
+                    lr_rows.append(row)
+
+            if lr_rows:
+                pd.DataFrame(lr_rows).to_excel(
+                    writer, sheet_name="Table 9 - Logistic Regress", index=False
+                )
+
     results_buf.seek(0)
 
     cleaned_buf = io.BytesIO()
@@ -1342,9 +1542,12 @@ def run_pipeline(df: pd.DataFrame) -> dict:
     # Step 5: Chi-square tests
     chi_results = run_chi_square(df)
 
-    # Step 6: Build outputs
-    summary = build_summary(df, n_total, n_excluded, chi_results)
-    results_buf, cleaned_buf = build_excel_files(df, chi_results)
+    # Step 6: Logistic regression
+    logistic_results = run_logistic_regression(df)
+
+    # Step 7: Build outputs
+    summary = build_summary(df, n_total, n_excluded, chi_results, logistic_results)
+    results_buf, cleaned_buf = build_excel_files(df, chi_results, logistic_results)
 
     return {
         "summary": summary,
